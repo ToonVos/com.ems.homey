@@ -97,6 +97,15 @@ class FlowManager {
       .registerRunListener(async (args) =>
         this.homey.emit('ems:dumpLoadOverride', args.enabled));
 
+    // Load-balance postpone — triggered when phase current is too high.
+    // Duration is read from the 'ev_postpone_minutes' app setting (default 30).
+    this.homey.flow.getActionCard('postpone_ev_charging')
+      .registerRunListener(async () => {
+        const minutes = this.homey.settings.get('ev_postpone_minutes') ?? 30;
+        this.app.ems.evController?.postponeCharging(minutes);
+        return true;
+      });
+
   }
 }
 

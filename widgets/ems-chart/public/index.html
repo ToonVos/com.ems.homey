@@ -1,0 +1,295 @@
+<html>
+<head>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--homey-font-family, -apple-system, sans-serif);
+      background: transparent;
+      padding: 10px 12px 8px;
+      color: var(--homey-text-color, #202124);
+    }
+
+    /* ── Header ── */
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .title  { font-size: 12px; font-weight: 700; opacity: .55; letter-spacing: 1px; }
+    .mode   { font-size: 10px; padding: 2px 9px; border-radius: 8px;
+              background: var(--homey-color-blue-light, #e8f0fe);
+              color: var(--homey-color-blue, #1a73e8); font-weight: 700; }
+
+    /* ── Battery SoC bar ── */
+    .soc-row { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; }
+    .soc-label { font-size: 9px; opacity: .5; text-transform: uppercase; letter-spacing: .4px; width: 30px; }
+    .soc-track { flex: 1; height: 5px; border-radius: 3px;
+                 background: var(--homey-color-mono-50, #e0e0e0); }
+    .soc-fill  { height: 100%; border-radius: 3px; background: #eab308;
+                 transition: width .6s ease; }
+    .soc-val   { font-size: 11px; font-weight: 700; color: #eab308; width: 32px; text-align: right; }
+
+    /* ── Power rows ── */
+    .power-rows { margin-bottom: 9px; }
+    .prow { display: flex; align-items: center; gap: 7px; padding: 2px 0; }
+    .pdot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .pname { font-size: 10px; opacity: .55; width: 30px; flex-shrink: 0; }
+    .ptrack { flex: 1; height: 3px; border-radius: 2px;
+              background: var(--homey-color-mono-50, #e0e0e0); }
+    .pfill  { height: 100%; border-radius: 2px; transition: width .6s ease; }
+    .pval   { font-size: 11px; font-weight: 600; width: 56px; text-align: right; flex-shrink: 0; }
+
+    /* ── Chart ── */
+    .chart-wrap { position: relative; height: 170px; margin-bottom: 6px; }
+
+    /* ── Footer ── */
+    .footer { display: flex; justify-content: space-between;
+              font-size: 10px; opacity: .45;
+              border-top: 1px solid var(--homey-color-mono-50, #e0e0e0);
+              padding-top: 5px; }
+    .plan-ok   { color: #22c55e; opacity: 1; }
+    .plan-warn { color: #f59e0b; opacity: 1; }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <span class="title">⚡ HEMS</span>
+    <span class="mode" id="mode">–</span>
+  </div>
+
+  <!-- Battery SoC -->
+  <div class="soc-row">
+    <span class="soc-label">Accu</span>
+    <div class="soc-track"><div class="soc-fill" id="socFill" style="width:0%"></div></div>
+    <span class="soc-val" id="socVal">–</span>
+  </div>
+
+  <!-- Power rows: Zon · Net · EV -->
+  <div class="power-rows">
+    <div class="prow">
+      <div class="pdot" style="background:#22c55e"></div>
+      <span class="pname">Zon</span>
+      <div class="ptrack"><div class="pfill" id="fillPv"   style="width:0%;background:#22c55e"></div></div>
+      <span class="pval" id="valPv"   style="color:#22c55e">–</span>
+    </div>
+    <div class="prow">
+      <div class="pdot" id="dotGrid" style="background:#8b5cf6"></div>
+      <span class="pname">Net</span>
+      <div class="ptrack"><div class="pfill" id="fillGrid" style="width:0%;background:#8b5cf6"></div></div>
+      <span class="pval" id="valGrid" style="color:#8b5cf6">–</span>
+    </div>
+    <div class="prow">
+      <div class="pdot" style="background:#f97316"></div>
+      <span class="pname">EV</span>
+      <div class="ptrack"><div class="pfill" id="fillEv"   style="width:0%;background:#f97316"></div></div>
+      <span class="pval" id="valEv"   style="color:#f97316">–</span>
+    </div>
+  </div>
+
+  <!-- History chart -->
+  <div class="chart-wrap">
+    <canvas id="histChart"></canvas>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <span id="planStatus">Plan: –</span>
+    <span id="updAt">–</span>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+  <script>
+    /* ── Constants ── */
+    const MAX_PTS  = 30;   // ~30 min history at 60 s polling
+    const POLL_MS  = 60000;
+    const MAX_W    = 12000; // reference for bar width calc
+
+    const MODE_LABELS = {
+      auto: 'Auto', battery_charge: '↑ Laden', solar_surplus: '☀ Overschot',
+      battery_discharge: '↓ Ontladen', grid_import: '⚡ Net', idle: '–',
+    };
+
+    /* ── Rolling history buffers ── */
+    const hist = { labels: [], pv: [], grid: [], ev: [] };
+
+    /* ── Chart instance ── */
+    let chart = null;
+
+    /* ── Helpers ── */
+    function $id(id) { return document.getElementById(id); }
+
+    function set(id, val) {
+      const el = $id(id);
+      if (el) el.textContent = val;
+    }
+
+    function fmtW(w) {
+      if (w == null) return '–';
+      const a = Math.abs(w);
+      return a >= 1000 ? (w / 1000).toFixed(1) + ' kW' : Math.round(w) + ' W';
+    }
+
+    function barPct(w) {
+      return Math.min(100, Math.max(0, Math.abs(w ?? 0) / MAX_W * 100)).toFixed(1) + '%';
+    }
+
+    function timeLbl() {
+      const n = new Date();
+      return String(n.getHours()).padStart(2,'0') + ':' + String(n.getMinutes()).padStart(2,'0');
+    }
+
+    /* ── Chart init ── */
+    function initChart() {
+      const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const gridColor  = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)';
+      const tickColor  = isDark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.35)';
+
+      chart = new Chart($id('histChart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: hist.labels,
+          datasets: [
+            { label: 'Zon',  data: hist.pv,   borderColor: '#22c55e', backgroundColor: 'transparent',
+              tension: 0.3, borderWidth: 1.8, pointRadius: 1.5, pointHoverRadius: 3 },
+            { label: 'Net',  data: hist.grid, borderColor: '#8b5cf6', backgroundColor: 'transparent',
+              tension: 0.3, borderWidth: 1.8, pointRadius: 1.5, pointHoverRadius: 3 },
+            { label: 'EV',   data: hist.ev,   borderColor: '#f97316', backgroundColor: 'transparent',
+              tension: 0.3, borderWidth: 1.8, pointRadius: 1.5, pointHoverRadius: 3 },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 400 },
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: {
+              display: true,
+              position: 'bottom',
+              labels: { font: { size: 9 }, boxWidth: 9, padding: 8, color: tickColor },
+            },
+            tooltip: {
+              bodyFont: { size: 10 },
+              callbacks: {
+                label: ctx => ' ' + ctx.dataset.label + ': ' + fmtW(ctx.parsed.y),
+              },
+            },
+          },
+          scales: {
+            x: {
+              ticks: { font: { size: 9 }, color: tickColor, maxTicksLimit: 7, maxRotation: 0 },
+              grid:  { color: gridColor },
+            },
+            y: {
+              ticks: {
+                font: { size: 9 }, color: tickColor,
+                callback: v => Math.abs(v) >= 1000 ? (v/1000).toFixed(1)+'k' : v,
+              },
+              grid: { color: gridColor },
+            },
+          },
+        },
+      });
+    }
+
+    /* ── Push one data point ── */
+    function push(s) {
+      hist.labels.push(timeLbl());
+      hist.pv.push(Math.round(s.pvW   ?? 0));
+      hist.grid.push(Math.round(s.gridW ?? 0));
+      hist.ev.push(Math.round(s.evW   ?? 0));
+
+      if (hist.labels.length > MAX_PTS) {
+        hist.labels.shift();
+        hist.pv.shift();
+        hist.grid.shift();
+        hist.ev.shift();
+      }
+    }
+
+    /* ── Main refresh ── */
+    async function refresh() {
+      try {
+        const s = await Homey.api('GET', '/state', {});
+        if (!s || !s.ready) return;
+
+        /* Mode badge */
+        set('mode', MODE_LABELS[s.mode] || s.mode);
+
+        /* Battery SoC */
+        const soc = s.batSoc ?? 0;
+        set('socVal', soc.toFixed(0) + '%');
+        $id('socFill').style.width = soc + '%';
+
+        /* Power bars */
+        const pv   = s.pvW   ?? 0;
+        const gw   = s.gridW ?? 0;
+        const ev   = s.evW   ?? 0;
+
+        $id('fillPv').style.width   = barPct(pv);
+        $id('fillGrid').style.width = barPct(gw);
+        $id('fillEv').style.width   = barPct(ev);
+
+        set('valPv',   fmtW(pv));
+
+        // Grid: show ↓ import (red tint) or ↑ export (green tint)
+        const gridEl = $id('valGrid');
+        if (gridEl) {
+          if (gw > 50) {
+            gridEl.textContent = '↓ ' + fmtW(gw);
+            gridEl.style.color = '#ea4335';
+            $id('dotGrid').style.background = '#ea4335';
+            $id('fillGrid').style.background = '#ea4335';
+          } else if (gw < -50) {
+            gridEl.textContent = '↑ ' + fmtW(Math.abs(gw));
+            gridEl.style.color = '#22c55e';
+            $id('dotGrid').style.background = '#22c55e';
+            $id('fillGrid').style.background = '#22c55e';
+          } else {
+            gridEl.textContent = fmtW(0);
+            gridEl.style.color = '#8b5cf6';
+            $id('dotGrid').style.background = '#8b5cf6';
+            $id('fillGrid').style.background = '#8b5cf6';
+          }
+        }
+
+        set('valEv', s.evCharging ? fmtW(ev) : '–');
+
+        /* Plan status */
+        const plan   = s.plan;
+        const planEl = $id('planStatus');
+        if (planEl && plan) {
+          if (plan.prio1Feasible) {
+            planEl.textContent = '✓ Plan haalbaar';
+            planEl.className   = 'plan-ok';
+          } else {
+            planEl.textContent = '⚠ Plan krap';
+            planEl.className   = 'plan-warn';
+          }
+        }
+
+        /* Update time */
+        set('updAt', timeLbl());
+
+        /* Push to chart */
+        push(s);
+        if (chart) {
+          chart.data.labels          = [...hist.labels];
+          chart.data.datasets[0].data = [...hist.pv];
+          chart.data.datasets[1].data = [...hist.grid];
+          chart.data.datasets[2].data = [...hist.ev];
+          chart.update('none');
+        }
+      } catch (e) {
+        console.error('[EMS chart]', e);
+      }
+    }
+
+    /* ── Homey ready ── */
+    function onHomeyReady(Homey) {
+      Homey.ready();
+      initChart();
+      refresh();
+      setInterval(refresh, POLL_MS);
+    }
+  </script>
+</body>
+</html>

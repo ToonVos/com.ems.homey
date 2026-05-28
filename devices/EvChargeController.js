@@ -81,6 +81,9 @@ class EvChargeController {
     // If tomorrow is a home day → skip night charging (car can charge on solar tomorrow)
     this._homeDays         = [0, 6]; // default: za + zo
 
+    // Load-balance postpone: timestamp until which EV charging is blocked
+    this._evPostponedUntil = 0;
+
   }
 
   // ─── Init & settings ──────────────────────────────────────────────────────
@@ -167,6 +170,19 @@ class EvChargeController {
     this.app.log(`[EvCtrl] Setting '${setting}' → ${value}`);
   }
 
+  /**
+   * Postpone EV charging for the given number of minutes.
+   * Called by the 'postpone_ev_charging' flow action (load-balance trigger).
+   */
+  postponeCharging(minutes) {
+    const ms = (minutes ?? 30) * 60_000;
+    this._evPostponedUntil = Date.now() + ms;
+    this.app.log(
+      `[EvCtrl] EV charging postponed for ${minutes} min ` +
+      `(until ${new Date(this._evPostponedUntil).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })})`
+    );
+  }
+
   getSettings() {
     return {
       mode:           this._mode,
@@ -250,6 +266,17 @@ class EvChargeController {
 
     if (!evState.connected) {
       this._currentTargetA = 0;
+      return;
+    }
+
+    // ── Load-balance postpone check ───────────────────────────────────────
+    // When a flow signals too-high phase current, EV charging is paused
+    // for a configurable number of minutes (see postponeCharging()).
+    if (Date.now() < this._evPostponedUntil) {
+      const remaining = Math.ceil((this._evPostponedUntil - Date.now()) / 60_000);
+      const action = { type: 'stop', reason: `load_balance(${remaining}min)` };
+      await this._applyAction(action, evState);
+      this._logTick(evState, action, 'postponed');
       return;
     }
 

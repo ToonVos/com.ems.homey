@@ -15,6 +15,7 @@
       'ev_max_current_a', 'ev_min_current_a', 'ev_fixed_current_a', 'ev_target_import_w',
       'ev_peak1_start', 'ev_peak1_end', 'ev_peak2_start', 'ev_peak2_end',
       'ev_night_start', 'ev_night_end', 'ev_bat_night_min_soc',
+      'ev_postpone_minutes',
     ];
 
     var BEHAVIOR_KEYS = [
@@ -27,6 +28,7 @@
       'ev_charge_mode', 'ev_max_current_a', 'ev_min_current_a', 'ev_fixed_current_a', 'ev_target_import_w',
       'ev_peak1_start', 'ev_peak1_end', 'ev_peak2_start', 'ev_peak2_end',
       'ev_night_charge', 'ev_night_start', 'ev_night_end', 'ev_bat_night_min_soc',
+      'ev_postpone_minutes',
     ];
 
     var DEVICE_BOOL_KEYS = ['hasBattery', 'hasEv', 'hasEvCharger', 'hasHeatPump', 'ev_night_charge'];
@@ -543,6 +545,12 @@
       </div>
     </div>
     <p class="hint" style="margin-top:2px">Tip: stel 0–0 in om een blok uit te schakelen.</p>
+
+    <!-- ── Belastingsbalancering ── -->
+    <label style="margin-top:14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#5f6368">Belastingsbalancering</label>
+    <p class="hint">Als de fasestroom te hoog wordt, kun je via een flow de actie "EV laden uitstellen" aanroepen. Het EV laden stopt dan voor onderstaand aantal minuten.</p>
+    <label>Uitstelduur (minuten)</label>
+    <input type="number" id="ev_postpone_minutes" value="30" min="1" max="240" step="5" />
 
     <!-- ── Nacht laden ── -->
     <div class="toggle-row" style="margin-top:14px">

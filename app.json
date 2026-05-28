@@ -1,6 +1,6 @@
 {
   "id": "com.ems.homey",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "compatibility": ">=12.0.0",
   "sdk": 3,
   "brandColor": "#0d1f3c",
@@ -587,6 +587,17 @@
         "titleFormatted": {
           "en": "Set dump load to [[enabled]]",
           "nl": "Dumplast instellen op [[enabled]]"
+        }
+      },
+      {
+        "id": "postpone_ev_charging",
+        "title": {
+          "en": "Postpone EV charging (load balance)",
+          "nl": "EV laden uitstellen (belastingsbalancering)"
+        },
+        "hint": {
+          "en": "Temporarily stops EV charging for the duration set in app settings (ev_postpone_minutes, default 30 min). Use this in a flow that monitors per-phase current to prevent overload.",
+          "nl": "Stopt EV laden tijdelijk voor de duur ingesteld in de app-instellingen (ev_postpone_minutes, standaard 30 min). Gebruik dit in een flow die fasestroom bewaakt om overbelasting te voorkomen."
         }
       }
     ]
