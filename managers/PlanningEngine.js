@@ -99,6 +99,12 @@ class PlanningEngine {
       let evNeededKwh = 0;
       let evFixedKwhPerHour = null; // set when mode is 'fixed' — planning uses it as constant
 
+      // Fixed EV charge power for plan visualisation (strategy B: always 5A minimum)
+      const evMinA      = this.homey.settings.get('ev_min_current_a') ?? 5;
+      const evPhases    = evConfig?.phases ?? 3;
+      const evMinPowerW = evMinA * evPhases * 230;  // W at minimum current
+      const evMinKwhPerH = evMinPowerW / 1000;       // kWh per hour at min current
+
       if (evConfig) {
         const evCtrl = this.app.ems.evController;
         if (evCtrl) {
@@ -297,6 +303,7 @@ class PlanningEngine {
         batDeltaKwh: +batDelta.toFixed(3),
         batSocPct:  +(batKwh / batCapKwh * 100).toFixed(1),
         evCharging: evAction,
+        evPowerW:   evAction ? evMinPowerW : 0,  // flat block at min current (strategy B)
         dumpLoad:   dumpAction,
         priceEur:   price?.price ?? null,
         isCheap,

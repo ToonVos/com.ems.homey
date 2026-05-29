@@ -175,10 +175,8 @@
           ? Math.round((s.batDeltaKwh ?? 0) * 1000) : 0);
       const batDisW = schedule.map(s =>
         s.batAction === 'discharge' ? -Math.round((s.batDeltaKwh ?? 0) * 1000) : null);
-      const evW     = schedule.map(s => {
-        if (!s.evCharging) return 0;
-        return Math.round(Math.max(0, (s.pvKwh - s.consumKwh - (s.batDeltaKwh ?? 0)) * 1000)) || 1500;
-      });
+      // EV: flat block at fixed min current (strategy B) — use evPowerW from plan
+      const evW = schedule.map(s => s.evCharging ? (s.evPowerW ?? 1150) : 0);
       const socLine = schedule.map(s => s.batSocPct ?? null);
 
       const ctx = $id('forecastChart').getContext('2d');
@@ -193,7 +191,7 @@
             { label: 'Verbruik',data: consumW,  borderColor: 'rgba(128,128,128,0.45)', backgroundColor:'transparent', fill: false, tension: 0.3, borderWidth: 1.2, borderDash:[4,3], pointRadius: 0, yAxisID: 'yW', order: 6 },
             { label: 'Accu ↑',  data: batChgW, borderColor: '#eab308', backgroundColor: 'rgba(234,179,8,0.32)',   fill: 'origin', tension: 0.2, borderWidth: 1.4, pointRadius: 0, yAxisID: 'yW', order: 3 },
             { label: 'Accu ↓',  data: batDisW, borderColor: '#1a73e8', backgroundColor: 'rgba(26,115,232,0.18)', fill: 'origin', tension: 0.2, borderWidth: 1.4, pointRadius: 0, yAxisID: 'yW', order: 2 },
-            { label: 'EV',      data: evW,     borderColor: '#f97316', backgroundColor: 'rgba(249,115,22,0.35)', fill: 'origin', tension: 0.2, borderWidth: 1.4, pointRadius: 0, yAxisID: 'yW', order: 4 },
+            { label: 'EV',      data: evW,     borderColor: '#f97316', backgroundColor: 'rgba(249,115,22,0.35)', fill: 'origin', tension: 0,   borderWidth: 1.4, pointRadius: 0, yAxisID: 'yW', order: 4 },
             { label: 'SoC %',   data: socLine, borderColor: 'rgba(234,179,8,0.6)', backgroundColor: 'transparent', fill: false, tension: 0.3, borderWidth: 1.2, borderDash:[2,2], pointRadius: 0, yAxisID: 'ySoc', order: 1 },
           ],
         },
