@@ -275,7 +275,7 @@ class EvChargeController {
     if (Date.now() < this._evPostponedUntil) {
       const remaining = Math.ceil((this._evPostponedUntil - Date.now()) / 60_000);
       const action = { type: 'stop', reason: `load_balance(${remaining}min)` };
-      await this._applyAction(action, evState);
+      await this._applyAction(action, evState, true);  // force: load-balance always wins
       this._logTick(evState, action, 'postponed');
       return;
     }
@@ -290,7 +290,7 @@ class EvChargeController {
 
     if (inPeak && !tripUrgent) {
       const action = { type: 'stop', reason: 'peak_block' };
-      await this._applyAction(action, evState);
+      await this._applyAction(action, evState, true);  // force: stop regardless of who started
       this._logTick(evState, action, `peak(${effectiveMode})`);
       return;
     }
@@ -492,13 +492,16 @@ class EvChargeController {
 
   // ─── Apply action ─────────────────────────────────────────────────────────
 
-  async _applyAction(action, evState) {
+  async _applyAction(action, evState, force = false) {
     switch (action.type) {
 
       case 'stop':
-        if (evState.charging && this.tesla._isChargingByEms) {
+        // force = true for hard rules (peak block, postpone): stop regardless of who started
+        // force = false for soft stops (no surplus): only stop EMS-owned sessions
+        if (evState.charging && (force || this.tesla._isChargingByEms)) {
           await this.tesla.stopCharging();
           this._currentTargetA = 0;
+          this.tesla._isChargingByEms = false;
         }
         break;
 
@@ -509,8 +512,10 @@ class EvChargeController {
         if (action.currentA !== this._currentTargetA) {
           await this.tesla.setChargeCurrent(action.currentA);
           this._currentTargetA = action.currentA;
+          this.tesla._isChargingByEms = true;
         } else if (!evState.charging) {
           await this.tesla.startCharging();
+          this.tesla._isChargingByEms = true;
         }
         break;
     }
