@@ -1,6 +1,6 @@
 {
   "id": "com.ems.homey",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "compatibility": ">=12.1.0",
   "sdk": 3,
   "brandColor": "#0d1f3c",
@@ -189,6 +189,28 @@
             }
           }
         ]
+      },
+      {
+        "id": "ev_start_charging",
+        "title": {
+          "en": "EMS wants to start EV charging",
+          "nl": "EMS wil EV laden starten"
+        },
+        "hint": {
+          "en": "Fires when the EMS wants to start charging. Connect to your EV app's start charging action.",
+          "nl": "Triggert als de EMS het laden wil starten. Koppel aan de 'start laden'-actie van je EV app."
+        }
+      },
+      {
+        "id": "ev_stop_charging",
+        "title": {
+          "en": "EMS wants to stop EV charging",
+          "nl": "EMS wil EV laden stoppen"
+        },
+        "hint": {
+          "en": "Fires when the EMS wants to stop charging. Connect to your EV app's stop charging action.",
+          "nl": "Triggert als de EMS het laden wil stoppen. Koppel aan de 'stop laden'-actie van je EV app."
+        }
       },
       {
         "id": "heatpump_mode_switched",

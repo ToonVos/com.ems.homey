@@ -24,8 +24,15 @@ class FlowManager {
     // EV charge control — user wires these trigger cards to Tesla flow actions
     // "When EMS wants to set EV charge current [current A] → Tesla: Stel laadstroom in op [current]"
     this.homey.on('ems:setEvChargeCurrent',   amps    => trigger('ev_set_charge_current').trigger({ current: amps }));
-    // "When EMS wants to start/stop EV charging [enabled] → Tesla: Laden [aan/uit]"
-    this.homey.on('ems:setEvChargingOn',      enabled => trigger('ev_set_charging_on').trigger({ enabled }));
+    // Two separate triggers for start and stop — simpler than a boolean token
+    // "When EMS wants to start EV charging → Tesla: Start het opladen"
+    // "When EMS wants to stop EV charging  → Tesla: Stop het opladen"
+    this.homey.on('ems:setEvChargingOn', enabled => {
+      if (enabled) trigger('ev_start_charging').trigger();
+      else         trigger('ev_stop_charging').trigger();
+      // Also keep the old combined trigger for backwards compat
+      trigger('ev_set_charging_on').trigger({ enabled });
+    });
   }
 
   _registerConditions() {
