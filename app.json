@@ -1,6 +1,6 @@
 {
   "id": "com.ems.homey",
-  "version": "1.2.7",
+  "version": "1.2.8",
   "compatibility": ">=12.1.0",
   "sdk": 3,
   "brandColor": "#0d1f3c",
@@ -754,7 +754,7 @@
         "en": "EMS Tomorrow",
         "nl": "EMS Morgen"
       },
-      "height": 4,
+      "height": 6,
       "settings": [],
       "api": {
         "getState": {
@@ -773,7 +773,7 @@
         "en": "EMS Today",
         "nl": "EMS Vandaag"
       },
-      "height": "large",
+      "height": 5,
       "settings": [],
       "api": {
         "getState": {
