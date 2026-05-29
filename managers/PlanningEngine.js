@@ -194,6 +194,13 @@ class PlanningEngine {
     let evCharged  = 0;
     const isDynamic = this.homey.settings.get('contract_type') === 'dynamic';
 
+    // Solar-first: if total PV can cover EV needs + expected consumption, don't force
+    // night/deadline charging — wait for solar surplus instead.
+    const totalPvKwh      = pvHourly.reduce((s, h) => s + (h.pvKwh ?? 0), 0);
+    const totalConsumKwh  = consumptionHourly.reduce((s, h) => s + (h.expectedKwh ?? 0), 0);
+    const solarCoversEv   = evNeededKwh > 0 &&
+                            (totalPvKwh - totalConsumKwh) >= evNeededKwh;
+
     for (let h = 0; h < 24; h++) {
       const pvKwh      = pvHourly[h]?.pvKwh           ?? 0;
       const consumKwh  = consumptionHourly[h]?.expectedKwh ?? 0;
@@ -255,8 +262,10 @@ class PlanningEngine {
         batKwh   += batDelta;
       }
 
-      // EV must charge before departure
-      if (trip && !evAction && evNeededKwh > evCharged) {
+      // EV must charge before departure — but only if solar won't cover it.
+      // When solarCoversEv=true we trust the surplus hours to do the job;
+      // forced night charging only kicks in when the sun really can't deliver enough.
+      if (trip && !evAction && evNeededKwh > evCharged && !solarCoversEv) {
         const depH = new Date(trip.departureTime).getHours();
         const hoursLeft = depH - h;
         if (hoursLeft <= 3 && isCheap) {
