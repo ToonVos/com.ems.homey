@@ -415,7 +415,8 @@ class EvChargeController {
       if (surplusW < -(minPowerW * 0.25)) {
         return { type: 'stop', reason: 'surplus_gone', surplusW };
       }
-      return { type: 'hold', reason: 'surplus_ok', currentA: this._minCurrentA };
+      // Always enforce minCurrentA — 'hold' would leave a previously higher current unchanged
+      return { type: 'charge', currentA: this._minCurrentA, reason: 'surplus_ok', surplusW };
     }
 
     if (surplusW >= minPowerW) {
@@ -438,7 +439,8 @@ class EvChargeController {
 
     if (evState.charging) {
       if (surplusW >= -(minPowerW * 0.25)) {
-        return { type: 'hold', reason: 'surplus_ok', currentA: this._minCurrentA };
+        // Enforce minCurrentA — never leave a higher current from a previous session
+        return { type: 'charge', currentA: this._minCurrentA, reason: 'surplus_ok', surplusW };
       }
       // Fall through to night/plan paths when surplus is clearly gone
     } else if (surplusW >= minPowerW) {
