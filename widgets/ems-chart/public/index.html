@@ -117,7 +117,12 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
   <script>
     const POLL_MS = 60_000;
-    const HOURS   = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0') + ':00');
+    // 144 labels: one per 10-minute slot (00:00, 00:10, 00:20 … 23:50)
+    const LABELS = Array.from({ length: 144 }, (_, i) => {
+      const h = Math.floor(i / 6);
+      const m = (i % 6) * 10;
+      return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+    });
     const MODE_LABELS = {
       auto: 'Auto', battery_charge: '↑ Laden', solar_surplus: '☀ Overschot',
       battery_discharge: '↓ Ontladen', grid_import: '⚡ Net', idle: '–',
@@ -135,22 +140,25 @@
       return String(n.getHours()).padStart(2,'0') + ':' + String(n.getMinutes()).padStart(2,'0');
     }
 
-    let actuals = Array(24).fill(null);
+    let actuals = Array(144).fill(null);
     let chart = null;
 
     function buildDatasets() {
-      const pvData = Array(24).fill(null), evData = Array(24).fill(null),
-            batChgData = Array(24).fill(null), gridImpData = Array(24).fill(null),
-            gridExpData = Array(24).fill(null);
-      const nowH = new Date().getHours();
-      for (let h = 0; h <= nowH; h++) {
-        const d = actuals[h]; if (!d) continue;
-        pvData[h]      = Math.max(0, d.pvW   ?? 0);
-        evData[h]      = Math.max(0, d.evW   ?? 0);
-        batChgData[h]  = Math.max(0, d.batW  ?? 0);
+      const now     = new Date();
+      const nowSlot = now.getHours() * 6 + Math.floor(now.getMinutes() / 10);
+
+      const pvData = Array(144).fill(null), evData = Array(144).fill(null),
+            batChgData = Array(144).fill(null), gridImpData = Array(144).fill(null),
+            gridExpData = Array(144).fill(null);
+
+      for (let i = 0; i <= nowSlot; i++) {
+        const d = actuals[i]; if (!d) continue;
+        pvData[i]      = Math.max(0, d.pvW   ?? 0);
+        evData[i]      = Math.max(0, d.evW   ?? 0);
+        batChgData[i]  = Math.max(0, d.batW  ?? 0);
         const g = d.gridW ?? 0;
-        gridImpData[h] = g >  50 ?  g : 0;
-        gridExpData[h] = g < -50 ? -g : 0;
+        gridImpData[i] = g >  50 ?  g : 0;
+        gridExpData[i] = g < -50 ? -g : 0;
       }
       return { pvData, evData, batChgData, gridImpData, gridExpData };
     }
@@ -163,7 +171,7 @@
       chart = new Chart($id('dayChart').getContext('2d'), {
         type: 'line',
         data: {
-          labels: HOURS,
+          labels: LABELS,
           datasets: [
             { label:'Zon',  data:pvData,      borderColor:'#22c55e', backgroundColor:'rgba(34,197,94,0.22)',  fill:'origin', tension:0.4, borderWidth:1.8, pointRadius:0, order:4 },
             { label:'EV',   data:evData,      borderColor:'#f97316', backgroundColor:'rgba(249,115,22,0.40)', fill:'origin', tension:0.3, borderWidth:1.4, pointRadius:0, order:2 },
@@ -185,7 +193,7 @@
             }}},
           },
           scales: {
-            x: { ticks:{font:{size:8},color:tickColor,maxTicksLimit:7,maxRotation:0,callback:(_,i)=>(i%4===0)?HOURS[i]:''}, grid:{color:gridColor} },
+            x: { ticks:{font:{size:8},color:tickColor,maxTicksLimit:9,maxRotation:0,callback:(_,i)=>(i%6===0)?LABELS[i]:''}, grid:{color:gridColor} },
             y: { ticks:{font:{size:8},color:tickColor,callback:v=>Math.abs(v)>=950?(v/1000).toFixed(0)+'k':v}, grid:{color:gridColor} },
           },
         },
@@ -193,9 +201,10 @@
     }
 
     function patchLive(s) {
-      const h = new Date().getHours();
-      const cur = actuals[h] || { pvW:0, gridW:0, batW:0, evW:0 };
-      actuals[h] = { ...cur, pvW:s.pvW??cur.pvW, gridW:s.gridW??cur.gridW, batW:s.batPowerW??cur.batW, evW:s.evW??cur.evW };
+      const now  = new Date();
+      const slot = now.getHours() * 6 + Math.floor(now.getMinutes() / 10);
+      const cur  = actuals[slot] || { pvW:0, gridW:0, batW:0, evW:0 };
+      actuals[slot] = { ...cur, pvW:s.pvW??cur.pvW, gridW:s.gridW??cur.gridW, batW:s.batPowerW??cur.batW, evW:s.evW??cur.evW };
     }
 
     function updateChart() {

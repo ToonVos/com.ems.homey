@@ -20,12 +20,25 @@ module.exports = {
 
   async getActuals({ homey }) {
     const now  = new Date();
-    const date = now.toISOString().slice(0, 10).replace(/-/g, '');  // YYYYMMDD
-    return Array.from({ length: 24 }, (_, h) => {
-      const d = homey.settings.get(`actuals_${date}_${h}`);
-      if (!d || d.n === 0) return null;
-      return { pvW: d.pvW, gridW: d.gridW, batW: d.batW, evW: d.evW };
-    });
+    // Use local date to match _recordActuals
+    const year = now.getFullYear();
+    const mon  = String(now.getMonth() + 1).padStart(2, '0');
+    const day  = String(now.getDate()).padStart(2, '0');
+    const date = `${year}${mon}${day}`;
+
+    // 144 slots: 24 hours × 6 ten-minute slots
+    const result = [];
+    for (let h = 0; h < 24; h++) {
+      for (let s = 0; s < 6; s++) {
+        const d = homey.settings.get(`actuals_${date}_${h}_${s}`);
+        if (!d || d.n === 0) {
+          result.push(null);
+        } else {
+          result.push({ pvW: d.pvW, gridW: d.gridW, batW: d.batW, evW: d.evW });
+        }
+      }
+    }
+    return result; // 144 elements
   },
 
   async getState({ homey }) {

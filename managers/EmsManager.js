@@ -304,20 +304,26 @@ class EmsManager {
   }
 
   /**
-   * Record hourly power averages for the dashboard chart.
-   * Called every tick (1 min). Stores running average per hour slot in Homey settings.
-   * Key format: actuals_YYYYMMDD_HH  →  { n, pvW, gridW, batW, evW }
-   * Only today's 24 keys are kept; previous days expire naturally.
+   * Record 10-minute power averages for the dashboard chart.
+   * Called every tick (1 min). Stores running average per 10-min slot in Homey settings.
+   * Key format: actuals_YYYYMMDD_HH_S  (S = 0-5, slot within the hour)
+   * Uses LOCAL date/time to avoid UTC midnight mismatch.
+   * 144 slots per day (24 h × 6 slots).
    */
   _recordActuals(state) {
-    const now  = new Date();
-    const date = now.toISOString().slice(0, 10).replace(/-/g, '');  // YYYYMMDD
-    const hour = now.getHours();
-    const key  = `actuals_${date}_${hour}`;
+    const now   = new Date();
+    // Local date — avoid toISOString() which gives UTC and can mismatch getHours() at midnight
+    const year  = now.getFullYear();
+    const mon   = String(now.getMonth() + 1).padStart(2, '0');
+    const day   = String(now.getDate()).padStart(2, '0');
+    const date  = `${year}${mon}${day}`;
+    const hour  = now.getHours();
+    const slot  = Math.floor(now.getMinutes() / 10); // 0–5
+    const key   = `actuals_${date}_${hour}_${slot}`;
 
-    const cur  = this.homey.settings.get(key) || { n: 0, pvW: 0, gridW: 0, batW: 0, evW: 0 };
-    const n    = cur.n + 1;
-    const avg  = (old, val) => Math.round((old * cur.n + (val ?? 0)) / n);
+    const cur   = this.homey.settings.get(key) || { n: 0, pvW: 0, gridW: 0, batW: 0, evW: 0 };
+    const n     = cur.n + 1;
+    const avg   = (old, val) => Math.round((old * cur.n + (val ?? 0)) / n);
 
     this.homey.settings.set(key, {
       n,
