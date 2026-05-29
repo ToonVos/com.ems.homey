@@ -59,7 +59,7 @@ class EmsControllerDevice extends Device {
     const hasEvCharger = s.get('hasEvCharger') ?? false;
     const evChargerId  = s.get('evChargerId')  ?? null;
     const hasHeatPump  = s.get('hasHeatPump')  ?? false;
-    const heatPumpId   = s.get('heatPumpId')   ?? null;
+    const heatPumpId   = s.get('heatPumpId')   ?? null; // legacy single-HP key
 
     const batteries = hasBattery && batteryId
       ? [{
@@ -122,9 +122,23 @@ class EmsControllerDevice extends Device {
       wallConnectorIp,
       hasHeatPump,
       heatPumpId,
-      thermostats:      hasHeatPump && heatPumpId
-        ? [{ id: heatPumpId, name: 'Warmtepomp', baseTemp: s.get('hp_base_temp') ?? 20 }]
-        : [],
+      thermostats: (() => {
+        // New multi-HP format: hp_0_id / hp_0_phase … hp_2_id / hp_2_phase
+        // Falls back to legacy single heatPumpId for existing installations.
+        const list = [];
+        for (let i = 0; i < 3; i++) {
+          const id    = s.get(`hp_${i}_id`)    ?? null;
+          const phase = s.get(`hp_${i}_phase`) ?? 0;   // 0 = all phases
+          if (id) list.push({ id, phase: Number(phase), name: `Warmtepomp ${i + 1}`,
+                              baseTemp: s.get(`hp_${i}_base_temp`) ?? 20 });
+        }
+        // Legacy fallback: if no new keys set but old heatPumpId exists
+        if (list.length === 0 && hasHeatPump && heatPumpId) {
+          list.push({ id: heatPumpId, phase: 0, name: 'Warmtepomp',
+                      baseTemp: s.get('hp_base_temp') ?? 20 });
+        }
+        return list;
+      })(),
       thermostatSettings: { offsetStep: s.get('hp_offset_deg') ?? 1 },
       surplusThreshold: s.get('surplus_threshold') ?? 300,
     };

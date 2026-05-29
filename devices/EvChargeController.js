@@ -400,51 +400,52 @@ class EvChargeController {
   }
 
   _decideSolarOnly(emsState, evState) {
-    const surplusW = this._calculateSurplus(emsState, evState);
-    const rawA     = this.tesla.calculateSolarCurrent(surplusW);
+    // Strategy B: fixed minimum current, threshold on/off — no dynamic stepping.
+    //
+    // surplusW already accounts for current EV load (see _calculateSurplus), so it
+    // represents "what would be available if we charge at min current".
+    //
+    // Start condition: surplus >= min EV power  → solar clearly covers min charge rate
+    // Stop condition:  surplus < -(minPower×0.25) → grid import > 25% of min power
+    //   (small hysteresis band avoids chattering at the threshold boundary)
+    const surplusW  = this._calculateSurplus(emsState, evState);
+    const minPowerW = this._toWatts(this._minCurrentA);
 
-    const stopThresholdA = evState.charging
-      ? (IEC_MIN_CURRENT_A - STOP_HYSTERESIS_A)
-      : this._minCurrentA;
-
-    if (rawA < stopThresholdA) {
-      return { type: 'stop', reason: 'below_min_solar', surplusW, rawA };
+    if (evState.charging) {
+      if (surplusW < -(minPowerW * 0.25)) {
+        return { type: 'stop', reason: 'surplus_gone', surplusW };
+      }
+      return { type: 'hold', reason: 'surplus_ok', currentA: this._minCurrentA };
     }
 
-    const targetA = Math.round(
-      Math.min(Math.max(rawA, this._minCurrentA), this._maxCurrentA) * 10
-    ) / 10;
-
-    if (Math.abs(targetA - this._currentTargetA) < HYSTERESIS_A && evState.charging) {
-      return { type: 'hold', reason: 'hysteresis', currentA: this._currentTargetA };
+    if (surplusW >= minPowerW) {
+      return {
+        type:     'charge',
+        currentA: this._minCurrentA,
+        reason:   'surplus_threshold',
+        surplusW,
+        powerW:   minPowerW,
+      };
     }
 
-    return {
-      type:     'charge',
-      currentA: targetA,
-      reason:   rawA < this._minCurrentA ? 'solar_hold_min' : 'solar_surplus',
-      surplusW,
-      rawA,
-    };
+    return { type: 'stop', reason: 'insufficient_surplus', surplusW };
   }
 
   _decideSolarOrGrid(emsState, evState, planSlot, now = new Date()) {
-    const surplusW = this._calculateSurplus(emsState, evState);
-    const rawA     = this.tesla.calculateSolarCurrent(surplusW);
+    // ── Solar path (same threshold strategy as solar_only) ──────────────
+    const surplusW  = this._calculateSurplus(emsState, evState);
+    const minPowerW = this._toWatts(this._minCurrentA);
 
-    const stopThresholdA = evState.charging
-      ? (IEC_MIN_CURRENT_A - STOP_HYSTERESIS_A)
-      : this._minCurrentA;
-
-    // ── Solar path ───────────────────────────────────────────────────────
-    if (rawA >= this._minCurrentA) {
-      const targetA = Math.round(Math.min(rawA, this._maxCurrentA) * 10) / 10;
-      return { type: 'charge', currentA: targetA, reason: 'solar_surplus', surplusW };
+    if (evState.charging) {
+      if (surplusW >= -(minPowerW * 0.25)) {
+        return { type: 'hold', reason: 'surplus_ok', currentA: this._minCurrentA };
+      }
+      // Fall through to night/plan paths when surplus is clearly gone
+    } else if (surplusW >= minPowerW) {
+      return { type: 'charge', currentA: this._minCurrentA, reason: 'surplus_threshold', surplusW };
     }
 
-    if (rawA >= stopThresholdA) {
-      return { type: 'charge', currentA: this._minCurrentA, reason: 'solar_hold_min', surplusW };
-    }
+    // No sufficient solar surplus — stop unless a grid path applies below
 
     // ── Night-charge path ────────────────────────────────────────────────
     // No solar → check if night charging is allowed

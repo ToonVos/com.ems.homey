@@ -242,9 +242,9 @@ class EmsManager {
       this.app.log(`[EMS] tick | PV: ${state.pvW.toFixed(0)}W | Grid: ${state.gridW.toFixed(0)}W | Surplus: ${state.surplusW.toFixed(0)}W | Bat: ${state.batSoc.toFixed(0)}% | ${energyState}`);
     }
 
-    // Thermostat offset based on energy state
+    // Thermostat offset — pass per-phase grid values so each HP reacts to its own phase
     if (this.thermostat) {
-      await this.thermostat.applyOffset(energyState);
+      await this.thermostat.applyOffset(energyState, state.gridPhases ?? null);
     }
 
     // Priority manager runs after plan — handles prio 1/2/3 allocation and dump load

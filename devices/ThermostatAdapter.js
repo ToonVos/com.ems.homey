@@ -72,32 +72,54 @@ class ThermostatAdapter {
 
   /**
    * Apply temperature offset based on current energy state.
-   * @param {'surplus' | 'normal' | 'deficit'} energyState
+   *
+   * @param {'surplus'|'normal'|'deficit'} energyState   — total grid energy state
+   * @param {number[]|null}               gridPhases      — per-phase grid W (negative = export)
+   *                                                        index 0 = L1, 1 = L2, 2 = L3
+   *
+   * Phase-aware logic:
+   *   - t.phase === 0  → use total energyState (no per-phase preference)
+   *   - t.phase === 1/2/3 → derive state from gridPhases[phase-1]:
+   *       gridW < -threshold  → surplus on that phase  → raise setpoint
+   *       gridW >  threshold  → deficit on that phase  → lower setpoint
+   *       otherwise           → normal
    */
-  async applyOffset(energyState) {
+  async applyOffset(energyState, gridPhases = null) {
     if (this.thermostats.length === 0) return;
 
-    // Check for user overrides via polling (replaces device.on() events)
     await this._checkUserOverrides();
 
-    let targetOffset = 0;
-    if (energyState === 'surplus') {
-      targetOffset = this._offsetStep;
-    } else if (energyState === 'deficit') {
-      targetOffset = -this._offsetStep;
-    }
-
-    // Clamp to max offset
-    targetOffset = Math.max(-this._maxOffset, Math.min(this._maxOffset, targetOffset));
-
-    // No change needed
-    if (targetOffset === this._activeOffset) return;
-
-    this._activeOffset = targetOffset;
+    const THRESHOLD = this.homey.settings.get('surplus_threshold') ?? 300;
 
     for (const t of this.thermostats) {
-      await this._applyToThermostat(t, targetOffset);
+      // Resolve effective energy state for this thermostat
+      let effectiveState = energyState;
+
+      if (t.phase > 0 && Array.isArray(gridPhases) && gridPhases[t.phase - 1] != null) {
+        const phaseW = gridPhases[t.phase - 1];
+        if      (phaseW < -THRESHOLD) effectiveState = 'surplus';
+        else if (phaseW >  THRESHOLD) effectiveState = 'deficit';
+        else                          effectiveState = 'normal';
+        this.app.log(
+          `[Thermostat] ${t.name} L${t.phase}: gridW=${phaseW.toFixed(0)}W → ${effectiveState}`
+        );
+      }
+
+      // Calculate target offset for this thermostat
+      let targetOffset = 0;
+      if (effectiveState === 'surplus') targetOffset = this._offsetStep;
+      else if (effectiveState === 'deficit') targetOffset = -this._offsetStep;
+      targetOffset = Math.max(-this._maxOffset, Math.min(this._maxOffset, targetOffset));
+
+      // Per-thermostat offset tracking (avoids unnecessary device calls)
+      if ((t._activeOffset ?? null) !== targetOffset) {
+        t._activeOffset  = targetOffset;
+        await this._applyToThermostat(t, targetOffset);
+      }
     }
+
+    // Keep top-level _activeOffset for backwards-compat (getPublicState uses it)
+    this._activeOffset = this.thermostats[0]?._activeOffset ?? 0;
   }
 
   /**

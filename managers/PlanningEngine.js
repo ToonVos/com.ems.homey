@@ -242,9 +242,18 @@ class PlanningEngine {
         }
       }
 
-      // Deficit: discharge battery if above minimum
-      if (netKwh < -0.05) {
-        // Cap by both available energy and max discharge rate
+      // Deficit: discharge battery — but NOT during solar hours when EV is also charging.
+      //
+      // When the EV is active and there is expected PV production, a deficit is a
+      // cloud dip: the solar will return and the EV should keep using it at 5A.
+      // Discharging the battery at the same time would deplete it needlessly and
+      // take away capacity needed for the evening.
+      //
+      // When the EV is NOT charging, the battery may discharge as normal to cover
+      // house consumption even during solar hours (e.g. a very cloudy morning).
+      const isSolarHour = pvKwh >= 0.1;
+      const blockDischarge = isSolarHour && evAction;   // cloud-dip guard: solar + EV charging
+      if (netKwh < -0.05 && !blockDischarge) {
         const canDischarge = Math.min(Math.abs(netKwh), batKwh - batMinKwh, batMaxDischargeKw ?? Infinity);
         if (canDischarge > 0.05) {
           batAction = 'discharge';
@@ -287,6 +296,7 @@ class PlanningEngine {
         priceEur:   price?.price ?? null,
         isCheap,
         isExpensive,
+        isSolarHour: pvKwh >= 0.1,
       });
     }
 
