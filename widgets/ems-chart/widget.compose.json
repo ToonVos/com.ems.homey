@@ -1,7 +1,7 @@
 {
   "name": {
-    "en": "EMS Dashboard",
-    "nl": "EMS Dashboard"
+    "en": "EMS Today",
+    "nl": "EMS Vandaag"
   },
-  "height": "large"
+  "height": 5
 }
