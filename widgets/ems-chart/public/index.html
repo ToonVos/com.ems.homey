@@ -225,6 +225,8 @@
     async function refreshState() {
       try {
         const s = await Homey.api('GET','/getState',{});
+        // Debug: show raw state in footer temporarily
+        set('updAt', s ? (s.ready ? timeLbl() : 'not ready') : 'null');
         if (!s?.ready) return;
         set('mode', MODE_LABELS[s.mode]||s.mode||'–');
         const gw=s.gridW??0, bw=s.batPowerW??0, soc=s.batSoc??0;
@@ -246,7 +248,7 @@
         }
         set('updAt', timeLbl());
         patchLive(s); updateChart();
-      } catch(e) {}
+      } catch(e) { set('updAt', 'err:' + (e?.message||e).toString().slice(0,30)); }
     }
 
     async function onHomeyReady(Homey) {
