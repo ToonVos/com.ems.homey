@@ -16,7 +16,17 @@
  *   - Surplus or deficit per hour
  */
 
-const PLAN_HOUR = 22; // hour of day to recalculate (22:00)
+// Scheduled recalculation moments:
+//   04:00 — fresh morning forecast for TODAY  (start of day with latest data)
+//   12:00 — midday update for TODAY           (cloud cover re-assessed)
+//   19:00 — evening forecast for TOMORROW     (plan the next day early)
+//   22:00 — final plan for TOMORROW           (classic end-of-day plan)
+const SCHEDULES = [
+  { hour:  4, target: 'today',    reason: 'morning_update' },
+  { hour: 12, target: 'today',    reason: 'midday_update'  },
+  { hour: 19, target: 'tomorrow', reason: 'evening_plan'   },
+  { hour: 22, target: 'tomorrow', reason: 'scheduled'      },
+];
 
 class PlanningEngine {
 
@@ -35,8 +45,8 @@ class PlanningEngine {
     this.tripPlanner       = tripPlanner;
     this.config            = config;
 
-    this._scheduleDailyRecalc();
-    this.app.log('[Planning] Engine ready, daily recalc at 22:00');
+    this._scheduleNextRecalc();
+    this.app.log('[Planning] Engine ready — recalc at 04:00(today), 12:00(today), 19:00(tomorrow), 22:00(tomorrow)');
   }
 
   destroy() {
@@ -47,12 +57,13 @@ class PlanningEngine {
 
   // ─── Plan calculation ─────────────────────────────────────────────────────
 
-  async recalculate(reason = 'scheduled') {
-    this.app.log(`[Planning] Recalculating day plan (reason: ${reason})...`);
+  async recalculate(reason = 'scheduled', target = 'tomorrow') {
+    this.app.log(`[Planning] Recalculating day plan (reason: ${reason}, target: ${target})...`);
 
     try {
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
+      const targetDate = new Date();
+      if (target === 'tomorrow') targetDate.setDate(targetDate.getDate() + 1);
+      // 'today' keeps targetDate as today
 
       // 1. Fetch external data — individual catches so one failure doesn't abort the plan
       const [forecast, prices] = await Promise.all([
@@ -70,12 +81,12 @@ class PlanningEngine {
 
       // 3. PV production curve (kWh per hour) — uses Open-Meteo radiation directly
       //    Cloud correction is already embedded in the shortwave_radiation values.
-      const pvCurve  = this.pvCurve.generateCurveFromForecast(forecast, 'tomorrow');
+      const pvCurve  = this.pvCurve.generateCurveFromForecast(forecast, target);
       const pvHourly = pvCurve.map(h => ({ hour: h.hour, pvKwh: h.expectedKw }));
       const totalPvKwh = pvHourly.reduce((s, h) => s + h.pvKwh, 0);
 
       // 4. Expected consumption (from learner, kWh per hour)
-      const dow = tomorrow.getDay();
+      const dow = targetDate.getDay();
       const consumptionHourly = await this.consumptionLearner.getExpectedHourly(dow);
       const totalConsumptionKwh = consumptionHourly.reduce((s, h) => s + h.expectedKwh, 0);
 
@@ -147,11 +158,13 @@ class PlanningEngine {
         surplusAfterBat,
       });
 
-      // 10. Thermostat mode for tomorrow
-      const nightMin     = forecast.tonight.nightMin;
-      const tomorrowMax  = forecast.tomorrow.dayMax;
+      // 10. Thermostat mode
+      const nightMin    = forecast.tonight?.nightMin ?? 10;
+      const targetDayMax = target === 'today'
+        ? (forecast.today?.dayMax ?? 15)
+        : (forecast.tomorrow?.dayMax ?? 15);
       const hpMode       = this.app.ems.thermostat
-        ? this.app.ems.thermostat.evaluateMode(nightMin, tomorrowMax)
+        ? this.app.ems.thermostat.evaluateMode(nightMin, targetDayMax)
         : 'heating';
 
       // 11. Assemble plan
@@ -160,7 +173,8 @@ class PlanningEngine {
       const hoursToEmpty = batMaxDischargeKw > 0 ? +Math.max(0, (batAvailKwh - batMinKwh) / batMaxDischargeKw).toFixed(1) : null;
 
       this._plan = {
-        date:           tomorrow.toISOString().substring(0, 10),
+        date:           targetDate.toISOString().substring(0, 10),
+        target,
         calculatedAt:   new Date().toISOString(),
         reason,
         summary: {
@@ -350,18 +364,35 @@ class PlanningEngine {
 
   // ─── Scheduling ───────────────────────────────────────────────────────────
 
-  _scheduleDailyRecalc() {
-    const now        = new Date();
-    const nextRun    = new Date();
-    nextRun.setHours(PLAN_HOUR, 0, 0, 0);
-    if (nextRun <= now) nextRun.setDate(nextRun.getDate() + 1);
+  _scheduleNextRecalc() {
+    const now = new Date();
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
-    const msUntil = nextRun - now;
-    this.app.log(`[Planning] Next scheduled recalc in ${Math.round(msUntil / 60000)} minutes`);
+    // Find the next scheduled slot (today or tomorrow)
+    let nextSlot = null;
+    let msUntil  = Infinity;
 
+    for (const slot of SCHEDULES) {
+      const slotMinutes = slot.hour * 60;
+      let diff = (slotMinutes - nowMinutes) * 60_000 - now.getSeconds() * 1000;
+      if (diff <= 0) diff += 24 * 60 * 60_000; // schedule for tomorrow if already past
+      if (diff < msUntil) {
+        msUntil  = diff;
+        nextSlot = slot;
+      }
+    }
+
+    if (!nextSlot) return;
+
+    this.app.log(
+      `[Planning] Next recalc: ${String(nextSlot.hour).padStart(2,'0')}:00 ` +
+      `(${nextSlot.target}, ${Math.round(msUntil / 60000)} min)`
+    );
+
+    if (this._timer) this.homey.clearTimeout(this._timer);
     this._timer = this.homey.setTimeout(async () => {
-      await this.recalculate('scheduled');
-      this._scheduleDailyRecalc(); // reschedule for next day
+      await this.recalculate(nextSlot.reason, nextSlot.target);
+      this._scheduleNextRecalc(); // schedule next slot
     }, msUntil);
   }
 
