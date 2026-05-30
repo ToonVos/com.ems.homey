@@ -142,7 +142,11 @@ module.exports = {
       await homey.app.ems.planningEngine.recalculate('manual_test', target);
       const plan = homey.app.ems.planningEngine.getCurrentPlan();
 
-      if (!plan) return { ok: false, error: 'Plan is null na herberekening' };
+      if (!plan) return {
+        ok: false,
+        error: 'Plan is null na herberekening',
+        lastError: homey.app.ems.planningEngine._lastError ?? 'onbekend',
+      };
 
       return {
         ok:       true,

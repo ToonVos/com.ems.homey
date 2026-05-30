@@ -212,6 +212,7 @@ class PlanningEngine {
 
       return this._plan;
     } catch (err) {
+      this._lastError = err.message ?? String(err);
       this.app.error('[Planning] recalculate error:', err);
       return null;
     }
