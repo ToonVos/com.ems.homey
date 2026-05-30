@@ -278,6 +278,26 @@
       }
     }
 
+    // Diagnostics
+    document.getElementById('btnTestWeather').addEventListener('click', function() {
+      var btn = this;
+      var pre = document.getElementById('weatherResult');
+      btn.textContent = '⏳ Ophalen...';
+      btn.disabled = true;
+      pre.style.display = 'none';
+      Homey.api('GET', '/testWeather', {}).then(function(result) {
+        pre.textContent = JSON.stringify(result, null, 2);
+        pre.style.display = 'block';
+        btn.textContent = '☁️ Test weersdata ophalen';
+        btn.disabled = false;
+      }).catch(function(err) {
+        pre.textContent = 'Fout: ' + err.message;
+        pre.style.display = 'block';
+        btn.textContent = '☁️ Test weersdata ophalen';
+        btn.disabled = false;
+      });
+    });
+
     function showSaved() {
       var el = document.getElementById('saved-msg');
       el.style.opacity = '1';
@@ -722,6 +742,18 @@
     <label>Overschot drempel (W)</label>
     <p class="hint">Minimaal zonne-overschot (netto teruglevering) voordat het EMS actie onderneemt zoals het starten van EV-laden of een dump-load.</p>
     <input type="number" id="surplus_threshold" value="300" step="50" min="50" max="2000" />
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       7. DIAGNOSTICS
+       ═══════════════════════════════════════════════════════════ -->
+  <div class="card">
+    <div class="card-title"><span class="icon">🔬</span> Diagnostics</div>
+    <p class="hint">Test de verbinding met Open-Meteo en bekijk de ruwe weersdata voor vandaag en morgen.</p>
+    <button id="btnTestWeather" style="padding:9px 16px;background:#1a73e8;color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer;margin-bottom:10px">
+      ☁️ Test weersdata ophalen
+    </button>
+    <pre id="weatherResult" style="display:none;background:#f8f9fa;border:1px solid #e0e0e0;border-radius:8px;padding:12px;font-size:11px;overflow-x:auto;white-space:pre-wrap;line-height:1.5"></pre>
   </div>
 
   <div id="saved-msg">Opgeslagen ✓</div>
