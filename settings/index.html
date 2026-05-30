@@ -173,6 +173,26 @@
         });
       }
 
+      var btnEv = document.getElementById('btnEvDiag');
+      if (btnEv) {
+        btnEv.addEventListener('click', function() {
+          var pre = document.getElementById('weatherResult');
+          btnEv.textContent = '⏳ Ophalen...';
+          btnEv.disabled = true;
+          Homey.api('GET', '/getEvDiag', {}).then(function(result) {
+            pre.textContent = JSON.stringify(result, null, 2);
+            pre.style.display = 'block';
+            btnEv.textContent = '🚗 EV diagnose';
+            btnEv.disabled = false;
+          }).catch(function(err) {
+            pre.textContent = 'Fout: ' + (err && err.message ? err.message : String(err));
+            pre.style.display = 'block';
+            btnEv.textContent = '🚗 EV diagnose';
+            btnEv.disabled = false;
+          });
+        });
+      }
+
       // 6. Change handlers
       document.querySelectorAll('input, select').forEach(function(el) {
         el.addEventListener('change', function() {
@@ -776,6 +796,9 @@
       </button>
       <button id="btnForceRecalc" style="padding:9px 16px;background:#22c55e;color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer">
         🔄 Herbereken plan nu
+      </button>
+      <button id="btnEvDiag" style="padding:9px 16px;background:#f97316;color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer">
+        🚗 EV diagnose
       </button>
     </div>
     <pre id="weatherResult" style="display:none;background:#f8f9fa;border:1px solid #e0e0e0;border-radius:8px;padding:12px;font-size:11px;overflow-x:auto;white-space:pre-wrap;line-height:1.5"></pre>

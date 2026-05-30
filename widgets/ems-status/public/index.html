@@ -14,7 +14,6 @@
       display: flex;
       flex-direction: column;
       padding: 10px 12px 6px;
-      overflow: hidden;
     }
 
     /* ── Header ── */
@@ -51,16 +50,12 @@
     .ev-tag   { font-size: 9px; font-weight: 600; padding: 1px 7px; border-radius: 5px;
                 background: rgba(249,115,22,.10); color: #f97316; white-space: nowrap; }
 
-    /* ── Chart fills remaining space ── */
+    /* ── Chart — vaste hoogte zodat Chart.js niet elke tick resizt ── */
     .chart-wrap {
-      flex: 1;
       position: relative;
-      min-height: 0;
+      height: 340px;
       margin-bottom: 5px;
-    }
-    .chart-wrap canvas {
-      width: 100% !important;
-      height: 100% !important;
+      flex-shrink: 0;
     }
 
     /* ── No plan ── */

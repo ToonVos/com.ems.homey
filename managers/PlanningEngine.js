@@ -259,6 +259,14 @@ class PlanningEngine {
 
       this.app.log(`[Planning] Plan ready: PV ${totalPvKwh.toFixed(1)} kWh, consumption ${totalConsumptionKwh.toFixed(1)} kWh, net ${netKwh.toFixed(1)} kWh`);
 
+      // Stuur tijdlijn-melding met plan-samenvatting
+      const planDate  = targetDate.toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short' });
+      const feasEmoji = prio1Feasible ? '✅' : '⚠️';
+      const feasTxt   = prio1Feasible ? 'haalbaar' : 'krap';
+      this.app.notifications?.send(
+        `${feasEmoji} Plan ${planDate}: ${totalPvKwh.toFixed(1)} kWh zon, ${evNeededKwh.toFixed(1)} kWh EV — ${feasTxt}`
+      );
+
       // Trigger Flow if prio 1 not feasible
       if (!prio1Feasible) {
         this.homey.emit('ems:prio1NotFeasible', this._plan.summary);

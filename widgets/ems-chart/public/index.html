@@ -14,7 +14,6 @@
       display: flex;
       flex-direction: column;
       padding: 9px 11px 5px;
-      overflow: hidden;
     }
 
     /* ── Header ── */
@@ -48,16 +47,12 @@
     .metric-val   { font-size: 11px; font-weight: 700; }
     .metric-sub   { font-size: 8px; opacity: .4; margin-top: 1px; }
 
-    /* ── Chart fills remaining space ── */
+    /* ── Chart — vaste hoogte zodat Chart.js niet elke tick resizt ── */
     .chart-wrap {
-      flex: 1;
       position: relative;
-      min-height: 0;
+      height: 270px;
       margin-bottom: 5px;
-    }
-    .chart-wrap canvas {
-      width: 100% !important;
-      height: 100% !important;
+      flex-shrink: 0;
     }
 
     /* ── Footer ── */

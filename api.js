@@ -133,6 +133,54 @@ module.exports = {
     }
   },
 
+  async getEvDiag({ homey }) {
+    try {
+      const ems   = homey.app.ems;
+      const state = ems._lastState;
+      const ev    = ems.tesla;
+      const ctrl  = ems.evController;
+
+      if (!state) return { ok: false, error: 'Geen state — EMS tick nog niet gedraaid' };
+
+      const gridW  = state.gridW ?? 0;
+      const evW    = state.evW  ?? 0;
+      const minA   = ctrl?._minCurrentA ?? 5;
+      const phases = ctrl?._evPhases    ?? 3;
+      const minPowerW = minA * phases * 230;
+      const targetImportW = ctrl?._targetImportW ?? 100;
+      const surplus = evW - gridW - targetImportW;
+
+      const evState = await ev?.getState().catch(() => null);
+
+      return {
+        ok: true,
+        ts:            new Date().toLocaleTimeString('nl-NL'),
+        solar_W:       Math.round(state.pvW ?? 0),
+        grid_W:        Math.round(gridW),
+        ev_W:          Math.round(evW),
+        surplus_W:     Math.round(surplus),
+        threshold_W:   minPowerW,
+        surplus_ok:    surplus >= minPowerW,
+        ev_connected:  evState?.connected ?? 'onbekend',
+        ev_charging:   evState?.charging  ?? 'onbekend',
+        ev_soc:        evState?.soc       ?? 'onbekend',
+        ev_currentA:   evState?.currentA  ?? 0,
+        isChargingByEms: ev?._isChargingByEms ?? false,
+        vehiclePresent:  ev?.isVehiclePresent() ?? 'onbekend',
+        chargeMode:      ctrl?._mode ?? 'onbekend',
+        targetA:         ctrl?._currentTargetA ?? 0,
+        lastCommandAgo:  ev ? Math.round((Date.now() - ev._lastCommandTime) / 1000) + 's geleden' : 'n/a',
+        inPeakHour:      ctrl?.isPeakHour() ?? false,
+        postponedUntil:  ev ? (Date.now() < ctrl._evPostponedUntil ? new Date(ctrl._evPostponedUntil).toLocaleTimeString('nl-NL') : 'niet uitgesteld') : 'n/a',
+        verdict: surplus >= minPowerW
+          ? (evState?.connected ? '✅ Zou moeten laden — check flows' : '❌ EV niet verbonden')
+          : `⏳ Surplus ${Math.round(surplus)}W < drempel ${minPowerW}W — wacht op meer zon`,
+      };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  },
+
   async forceRecalculate({ homey }) {
     try {
       // Clear weather cache so fresh data is fetched

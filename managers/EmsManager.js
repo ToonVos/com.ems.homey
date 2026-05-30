@@ -277,6 +277,7 @@ class EmsManager {
         await this.battery.setCharging(false);
         await this.battery.setDischarging(false);
         this.app.log(`[EMS] Nacht EV reserve bereikt (${batKwh.toFixed(2)} kWh) — accu idle, EV op net`);
+        this.app.notifications?.send(`🔋 Accu reserve bereikt (${batKwh.toFixed(1)} kWh) — EV laadt verder op net`);
       }
       if (this.evController) await this.evController.tick(state, slot);
       this.homey.emit('ems:dumpLoadShouldActivate', false);

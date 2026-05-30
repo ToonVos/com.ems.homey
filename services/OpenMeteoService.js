@@ -85,7 +85,7 @@ class OpenMeteoService {
       return parsed;
     } catch (err) {
       this.app.error('[OpenMeteo] Fetch error:', err.message);
-      // Return a pessimistic fallback if fetch fails
+      this.app.notifications?.send(`❌ Weersdata ophalen mislukt: ${err.message.slice(0, 60)} — fallback gebruikt`);
       return this._fallback();
     }
   }

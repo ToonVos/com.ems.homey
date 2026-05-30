@@ -34,7 +34,8 @@
     "energy"
   ],
   "permissions": [
-    "homey:manager:api"
+    "homey:manager:api",
+    "homey:manager:notifications"
   ],
   "author": {
     "name": "Menno",
@@ -835,6 +836,10 @@
     "forceRecalculate": {
       "method": "GET",
       "path": "/forceRecalculate"
+    },
+    "getEvDiag": {
+      "method": "GET",
+      "path": "/getEvDiag"
     }
   }
 }
