@@ -80,6 +80,32 @@ module.exports = {
     }
   },
 
+  async testWeather({ homey }) {
+    try {
+      // Force fresh fetch (bypass cache)
+      homey.app.ems.openMeteo._cache = null;
+      const forecast = await homey.app.ems.openMeteo.getForecast();
+
+      const summarize = (day) => ({
+        dayMax:       day.dayMax,
+        avgCloudPct:  day.avgCloudPct,
+        radiationSum: day.radiationSum,
+        peakRadW:     Math.max(...day.hourly.map(h => h.radiationW ?? 0)),
+        totalRadKwh:  +(day.hourly.reduce((s, h) => s + (h.radiationW ?? 0), 0) / 1000).toFixed(2),
+        solarHours:   day.hourly.filter(h => (h.radiationW ?? 0) > 50).map(h => `${String(h.hour).padStart(2,'0')}:00 ${h.radiationW.toFixed(0)}W/m²`),
+      });
+
+      return {
+        ok:       true,
+        today:    summarize(forecast.today),
+        tomorrow: summarize(forecast.tomorrow),
+        tonight:  forecast.tonight,
+      };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  },
+
   async testWallConnector({ homey, body }) {
     const { ip } = body;
     try {

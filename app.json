@@ -1,6 +1,6 @@
 {
   "id": "com.ems.homey",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "compatibility": ">=12.1.0",
   "sdk": 3,
   "brandColor": "#0d1f3c",
@@ -823,6 +823,10 @@
     "getActuals": {
       "method": "GET",
       "path": "/getActuals"
+    },
+    "testWeather": {
+      "method": "GET",
+      "path": "/testWeather"
     }
   }
 }
