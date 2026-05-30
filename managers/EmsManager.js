@@ -25,6 +25,8 @@ class EmsManager {
     this.mode  = 'auto';
     this._loop = null;
     this._lastState = null;
+    this._nightEvActive = false;     // EV is being charged from battery at night
+    this._batReserveKwh = 0;        // current night reserve target
 
     // Device adapters
     this.deviceProfiler = new DeviceProfiler(app);
@@ -258,6 +260,36 @@ class EmsManager {
   }
 
   async _followPlan(slot, state) {
+    // ── Night EV charging from battery ────────────────────────────────────────
+    // When plan schedules EV to charge from battery at night, monitor reserve.
+    if (slot.batAction === 'ev_night_discharge') {
+      this._nightEvActive = true;
+      const plan = this.planningEngine.getCurrentPlan();
+      this._batReserveKwh = plan?.summary?.batReserveKwh ?? 0;
+
+      const batKwh = state.batAvailKwh ?? 0;
+      if (batKwh > this._batReserveKwh) {
+        // Battery still above reserve — discharge to power EV
+        await this.battery.setDischarging(true);
+        this.app.log(`[EMS] Nacht EV accu: ${batKwh.toFixed(2)} kWh > reserve ${this._batReserveKwh.toFixed(2)} kWh — accu levert`);
+      } else {
+        // Reserve bereikt — battery naar idle, EV gaat op net verder
+        await this.battery.setCharging(false);
+        await this.battery.setDischarging(false);
+        this.app.log(`[EMS] Nacht EV reserve bereikt (${batKwh.toFixed(2)} kWh) — accu idle, EV op net`);
+      }
+      if (this.evController) await this.evController.tick(state, slot);
+      this.homey.emit('ems:dumpLoadShouldActivate', false);
+      return;
+    }
+
+    // Reset night EV flag when no longer in night charging slot
+    if (this._nightEvActive) {
+      this._nightEvActive = false;
+      this.app.log('[EMS] Nacht EV klaar — accu terug naar auto');
+    }
+
+    // ── Normal plan following ─────────────────────────────────────────────────
     // Battery
     if (slot.batAction === 'charge' || slot.batAction === 'grid_charge') {
       await this.battery.setCharging(true, state.pvW > 0 ? state.netW : null);
@@ -331,6 +363,128 @@ class EmsManager {
       gridW: avg(cur.gridW,  state.gridW),
       batW:  avg(cur.batW,   state.batPowerW),
       evW:   avg(cur.evW,    state.evW),
+    });
+  }
+
+  // ─── Night / Day load tracking ───────────────────────────────────────────
+
+  /** Local date string YYYYMMDD */
+  _localDateStr(date = new Date()) {
+    return `${date.getFullYear()}${String(date.getMonth()+1).padStart(2,'0')}${String(date.getDate()).padStart(2,'0')}`;
+  }
+
+  /**
+   * Compute last night's house load (kWh) from actuals.
+   * Period: yesterday's sunset → today's sunrise.
+   * Excludes EV charging. Stores result as night_load_YYYYMMDD.
+   */
+  computeNightLoad() {
+    try {
+      const now       = new Date();
+      const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+      const sunToday  = this.pvCurve.getSunTimes(now);
+      const sunYest   = this.pvCurve.getSunTimes(yesterday);
+      const todayStr  = this._localDateStr(now);
+      const yestStr   = this._localDateStr(yesterday);
+
+      let totalKwh = 0;
+      let slots    = 0;
+
+      // Yesterday: sunset hour → 23:59
+      const sunsetH = Math.floor(sunYest.sunsetH);
+      for (let h = sunsetH; h < 24; h++) {
+        for (let s = 0; s < 6; s++) {
+          const d = this.homey.settings.get(`actuals_${yestStr}_${h}_${s}`);
+          if (!d || d.n === 0) continue;
+          // Night: pvW ≈ 0, house = gridW - evW
+          totalKwh += Math.max(0, (d.gridW - (d.evW ?? 0))) * (10 / 60 / 1000);
+          slots++;
+        }
+      }
+
+      // Today: 00:00 → sunrise hour
+      const sunriseH = Math.ceil(sunToday.sunriseH);
+      for (let h = 0; h < sunriseH; h++) {
+        for (let s = 0; s < 6; s++) {
+          const d = this.homey.settings.get(`actuals_${todayStr}_${h}_${s}`);
+          if (!d || d.n === 0) continue;
+          totalKwh += Math.max(0, (d.gridW - (d.evW ?? 0))) * (10 / 60 / 1000);
+          slots++;
+        }
+      }
+
+      if (slots === 0) return null;
+      this.homey.settings.set(`night_load_${yestStr}`, +totalKwh.toFixed(3));
+      this.app.log(`[EMS] Night load: ${totalKwh.toFixed(2)} kWh (${slots} slots, zonsondergang ${sunsetH}:00 → zonsopkomst ${sunriseH}:00)`);
+      return totalKwh;
+    } catch (e) {
+      this.app.error('[EMS] computeNightLoad error:', e.message);
+      return null;
+    }
+  }
+
+  /**
+   * Compute today's hourly house load (kWh per hour) from actuals.
+   * Period: sunrise → now (or sunset).
+   * Excludes EV charging. Stores result as day_load_YYYYMMDD.
+   */
+  computeDayLoad() {
+    try {
+      const now      = new Date();
+      const sun      = this.pvCurve.getSunTimes(now);
+      const todayStr = this._localDateStr(now);
+      const sunriseH = Math.ceil(sun.sunriseH);
+      const sunsetH  = Math.floor(sun.sunsetH);
+      const nowH     = now.getHours();
+
+      const hourlyKwh = Array(24).fill(0);
+
+      for (let h = sunriseH; h <= Math.min(nowH, sunsetH); h++) {
+        for (let s = 0; s < 6; s++) {
+          const d = this.homey.settings.get(`actuals_${todayStr}_${h}_${s}`);
+          if (!d || d.n === 0) continue;
+          // Day: house = pvW + gridW - evW (solar offsets some grid)
+          hourlyKwh[h] += Math.max(0, (d.pvW ?? 0) + d.gridW - (d.evW ?? 0)) * (10 / 60 / 1000);
+        }
+      }
+
+      this.homey.settings.set(`day_load_${todayStr}`, hourlyKwh);
+      const total = hourlyKwh.reduce((s, v) => s + v, 0);
+      this.app.log(`[EMS] Day load: ${total.toFixed(2)} kWh total`);
+      return hourlyKwh;
+    } catch (e) {
+      this.app.error('[EMS] computeDayLoad error:', e.message);
+      return null;
+    }
+  }
+
+  /** Rolling 3-day average night load (kWh). Fallback: 30% of bat capacity. */
+  getRollingNightLoad() {
+    const values = [];
+    for (let i = 1; i <= 3; i++) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      const v = this.homey.settings.get(`night_load_${this._localDateStr(d)}`);
+      if (v != null) values.push(v);
+    }
+    if (values.length === 0) {
+      const batCap = this.homey.settings.get('bat_capacity_kwh') ?? 5;
+      return batCap * 0.30;  // fallback estimate
+    }
+    return values.reduce((s, v) => s + v, 0) / values.length;
+  }
+
+  /** Rolling 3-day average day load per hour (array[24] kWh). Fallback: null. */
+  getRollingDayLoad() {
+    const arrays = [];
+    for (let i = 1; i <= 3; i++) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      const v = this.homey.settings.get(`day_load_${this._localDateStr(d)}`);
+      if (Array.isArray(v)) arrays.push(v);
+    }
+    if (arrays.length === 0) return null;
+    return Array.from({ length: 24 }, (_, h) => {
+      const vals = arrays.map(a => a[h] ?? 0);
+      return vals.reduce((s, v) => s + v, 0) / vals.length;
     });
   }
 

@@ -6,6 +6,12 @@ module.exports = {
     return homey.app.ems.getPublicState();
   },
 
+  async getPlan({ homey }) {
+    return homey.app.ems.planningEngine
+      ? homey.app.ems.planningEngine.getCurrentPlan()
+      : null;
+  },
+
   async getActuals({ homey }) {
     const now  = new Date();
     const year = now.getFullYear();

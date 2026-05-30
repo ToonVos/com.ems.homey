@@ -163,25 +163,42 @@
 
     let chart = null;
 
+    function _calcDatasets(schedule) {
+      return [
+        schedule.map(s => Math.round((s.pvKwh ?? 0) * 1000)),
+        schedule.map(s => Math.round((s.consumKwh ?? 0) * 1000)),
+        schedule.map(s => (s.batAction==='charge'||s.batAction==='grid_charge') ? Math.round((s.batDeltaKwh??0)*1000) : 0),
+        schedule.map(s => s.batAction==='discharge' ? -Math.round((s.batDeltaKwh??0)*1000) : null),
+        // EV: show actual surplus going to EV per hour (pv - consumption)
+        // This keeps the EV area within the solar parabola and correctly shows
+        // what fraction of solar goes to the car vs grid export.
+        schedule.map(s => {
+          if (!s.evCharging) return 0;
+          const pvW     = Math.round((s.pvKwh    ?? 0) * 1000);
+          const consumW = Math.round((s.consumKwh ?? 0) * 1000);
+          const batW    = (s.batAction==='charge'||s.batAction==='grid_charge') ? Math.round((s.batDeltaKwh??0)*1000) : 0;
+          return Math.max(0, pvW - consumW - batW);
+        }),
+        schedule.map(s => s.batSocPct ?? null),
+      ];
+    }
+
     function buildChart(schedule) {
+      const datasets = _calcDatasets(schedule);
+
+      // Update existing chart without destroying — prevents resize flash on each tick
+      if (chart) {
+        datasets.forEach((d, i) => { chart.data.datasets[i].data = d; });
+        chart.update('none');
+        return;
+      }
+
       const isDark    = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
       const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
       const tickColor = isDark ? 'rgba(255,255,255,0.28)'  : 'rgba(0,0,0,0.28)';
-
-      const pvW     = schedule.map(s => Math.round((s.pvKwh     ?? 0) * 1000));
-      const consumW = schedule.map(s => Math.round((s.consumKwh ?? 0) * 1000));
-      const batChgW = schedule.map(s =>
-        (s.batAction === 'charge' || s.batAction === 'grid_charge')
-          ? Math.round((s.batDeltaKwh ?? 0) * 1000) : 0);
-      const batDisW = schedule.map(s =>
-        s.batAction === 'discharge' ? -Math.round((s.batDeltaKwh ?? 0) * 1000) : null);
-      // EV: flat block at fixed min current (strategy B) — use evPowerW from plan
-      const evW = schedule.map(s => s.evCharging ? (s.evPowerW ?? 1150) : 0);
-      const socLine = schedule.map(s => s.batSocPct ?? null);
+      const [pvW, consumW, batChgW, batDisW, evW, socLine] = datasets;
 
       const ctx = $id('forecastChart').getContext('2d');
-      if (chart) chart.destroy();
-
       chart = new Chart(ctx, {
         type: 'line',
         data: {

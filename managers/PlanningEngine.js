@@ -88,26 +88,52 @@ class PlanningEngine {
           : null,
       ]);
 
+      // 2b. Compute and store night/day load from actuals (feed rolling averages)
+      if (reason === 'morning_update' || reason === 'startup') {
+        this.app.ems.computeNightLoad?.();   // previous night → stored as night_load
+      }
+      if (reason === 'evening_plan' || reason === 'scheduled') {
+        this.app.ems.computeDayLoad?.();     // today's day → stored as day_load
+      }
+
       // 3. PV production curve (kWh per hour) — uses Open-Meteo radiation directly
-      //    Cloud correction is already embedded in the shortwave_radiation values.
       const pvCurve  = this.pvCurve.generateCurveFromForecast(forecast, target);
       const pvHourly = pvCurve.map(h => ({ hour: h.hour, pvKwh: h.expectedKw }));
       const totalPvKwh = pvHourly.reduce((s, h) => s + h.pvKwh, 0);
 
-      // 4. Expected consumption (from learner, kWh per hour)
+      // 4. Expected consumption per hour
+      // Prefer rolling 3-day day load (EV excluded) over consumptionLearner.
+      const rollingDayLoad = this.app.ems.getRollingDayLoad?.();
       const dow = targetDate.getDay();
-      const consumptionHourly = await this.consumptionLearner.getExpectedHourly(dow);
+      const consumptionHourly = rollingDayLoad
+        ? rollingDayLoad.map((kwh, h) => ({ hour: h, expectedKwh: kwh }))
+        : await this.consumptionLearner.getExpectedHourly(dow);
       const totalConsumptionKwh = consumptionHourly.reduce((s, h) => s + h.expectedKwh, 0);
 
       // 5. Battery params
       const batState    = await this.app.ems.battery.getState();
       const batCapKwh   = batState.totalCapacityKwh;
-      // Battery manages its own SoC limits; for planning we use capacity from settings
       const batCapFromSettings = this.homey.settings.get('bat_capacity_kwh') ?? batCapKwh ?? 5;
       const batAvailKwh = batState.availableKwh;
-      // Planning estimates: assume battery can absorb up to 90% and discharge down to 20%
       const batMaxKwh   = batCapFromSettings * 0.90;
-      const batMinKwh   = batCapFromSettings * 0.20;
+
+      // Battery reserve = night load + morning load until EV can solar-charge.
+      // This is the minimum the battery must hold for the coming night.
+      const avgNightLoadKwh = this.app.ems.getRollingNightLoad?.() ?? batCapFromSettings * 0.30;
+
+      // Sun times for target date (to find first EV-solar-capable hour)
+      const sunTimes    = this.pvCurve.getSunTimes(targetDate);
+      const sunriseH    = Math.ceil(sunTimes.sunriseH);
+
+      // Morning load: house consumption from sunrise until EV can charge from solar
+      // EV can solar-charge in the first hour where surplus >= evMinKwh (calculated below,
+      // so we use a preliminary estimate here based on consumptionHourly).
+      let morningPeakKwh = 0;
+      // We'll recalculate this once evMinKwhPerH is known (see after evConfig section)
+
+      // Preliminary batMinKwh — refined after reserve calculation
+      const batMinKwhFloor = batCapFromSettings * 0.10;  // absolute safety floor (10%)
+      let batMinKwh = batMinKwhFloor;
       // Max charge/discharge rate (kW) — limits how much can be moved per hour
       const batCfg          = this.config?.batteries?.[0];
       const batMaxChargeKw  = (batCfg?.maxChargeW  ?? this.homey.settings.get('bat_max_charge_w')  ?? 2500) / 1000;
@@ -147,6 +173,28 @@ class PlanningEngine {
         }
       }
 
+      // 6b. Refine battery reserve now that evMinKwhPerH is known
+      // Morning load = house consumption from sunrise until first hour solar covers EV
+      const firstEvSolarHour = pvHourly.findIndex((h, i) =>
+        i >= sunriseH && (h.pvKwh * 1000 - (consumptionHourly[i]?.expectedKwh ?? 0) * 1000) >= evMinPowerW
+      );
+      const evSolarStart = firstEvSolarHour >= 0 ? firstEvSolarHour : sunriseH + 4; // fallback +4h
+      morningPeakKwh = consumptionHourly
+        .slice(sunriseH, evSolarStart)
+        .reduce((s, h) => s + (h.expectedKwh ?? 0), 0);
+
+      const batReserveKwh = avgNightLoadKwh + morningPeakKwh;
+      batMinKwh = Math.max(batMinKwhFloor, batReserveKwh);
+
+      this.app.log(
+        `[Planning] Reserve: nacht ${avgNightLoadKwh.toFixed(2)} kWh + ochtend ${morningPeakKwh.toFixed(2)} kWh` +
+        ` = ${batReserveKwh.toFixed(2)} kWh | EV solar start: ${evSolarStart}:00`
+      );
+
+      // Compute load/charge for night EV charging from battery
+      // batAvailableForEv = what battery can spare above reserve
+      const batAvailableForEv = Math.max(0, batAvailKwh - batReserveKwh);
+
       // 7. Balance
       const netKwh       = totalPvKwh - totalConsumptionKwh;
       const canFillBatKwh = batMaxKwh - batAvailKwh;
@@ -163,8 +211,10 @@ class PlanningEngine {
         batAvailKwh, batMaxKwh, batMinKwh,
         batCapKwh: batCapKwh ?? batCapFromSettings,
         batMaxChargeKw, batMaxDischargeKw,
-        evNeededKwh, evFixedKwhPerHour, evMinPowerW, trip, evConfig,
-        surplusAfterBat,
+        evNeededKwh, evFixedKwhPerHour, evMinPowerW,
+        evMinKwhPerH, batReserveKwh, batAvailableForEv,
+        trip, evConfig, surplusAfterBat,
+        sunriseH, evSolarStart,
       });
 
       // 10. Thermostat mode
@@ -199,6 +249,10 @@ class PlanningEngine {
           prio1Feasible,
           hpMode,
           hasCheapHours:      prices ? prices.some(p => p.isCheap) : false,
+          batReserveKwh:      +batReserveKwh.toFixed(2),
+          batAvailableForEv:  +batAvailableForEv.toFixed(2),
+          avgNightLoadKwh:    +avgNightLoadKwh.toFixed(2),
+          evSolarStartHour:   evSolarStart,
         },
         schedule,
       };
@@ -222,19 +276,23 @@ class PlanningEngine {
 
   _buildHourlySchedule({ pvHourly, consumptionHourly, prices, batAvailKwh, batMaxKwh,
                           batMinKwh, batCapKwh, batMaxChargeKw, batMaxDischargeKw,
-                          evNeededKwh, evFixedKwhPerHour, evMinPowerW,
-                          trip, evConfig, surplusAfterBat }) {
+                          evNeededKwh, evFixedKwhPerHour, evMinPowerW, evMinKwhPerH,
+                          batReserveKwh, batAvailableForEv,
+                          trip, evConfig, surplusAfterBat, sunriseH, evSolarStart }) {
     const schedule = [];
     let batKwh     = batAvailKwh;
     let evCharged  = 0;
     const isDynamic = this.homey.settings.get('contract_type') === 'dynamic';
 
-    // Solar-first: if total PV can cover EV needs + expected consumption, don't force
-    // night/deadline charging — wait for solar surplus instead.
+    // Solar-first: if total PV surplus covers EV need → no forced night/deadline charging
     const totalPvKwh      = pvHourly.reduce((s, h) => s + (h.pvKwh ?? 0), 0);
     const totalConsumKwh  = consumptionHourly.reduce((s, h) => s + (h.expectedKwh ?? 0), 0);
     const solarCoversEv   = evNeededKwh > 0 &&
                             (totalPvKwh - totalConsumKwh) >= evNeededKwh;
+
+    // Night EV charging from battery: available if solar insufficient
+    let batEvNightCharged = 0;
+    const canNightChargeFromBat = !solarCoversEv && evConfig && (batAvailableForEv ?? 0) > 0.1;
 
     for (let h = 0; h < 24; h++) {
       const pvKwh      = pvHourly[h]?.pvKwh           ?? 0;
@@ -253,9 +311,9 @@ class PlanningEngine {
       let dumpAction = false;
       let batDelta   = 0;
 
-      // Surplus: charge battery, then EV, then dump
+      // Surplus: charge battery, then EV (only above threshold), then dump
       if (netKwh > 0 && !isExpensive) {
-        // Cap by both available headroom and max charge rate (kW = kWh over 1 hour)
+        // Battery first — cap by available headroom and max charge rate
         const canCharge = Math.min(netKwh, batMaxKwh - batKwh, batMaxChargeKw ?? Infinity);
         if (canCharge > 0.05) {
           batAction = 'charge';
@@ -264,8 +322,10 @@ class PlanningEngine {
           netKwh   -= canCharge;
         }
 
-        // Remaining surplus → EV
-        if (netKwh > 0 && evNeededKwh > evCharged && evConfig) {
+        // EV: only when surplus >= min EV power (strategy B threshold)
+        // This ensures the EV block in the plan only appears when solar truly covers it
+        const evMinKwh = evMinKwhPerH ?? (evMinPowerW / 1000);
+        if (netKwh >= evMinKwh && evNeededKwh > evCharged && evConfig) {
           evAction  = true;
           evCharged = Math.min(evNeededKwh, evCharged + netKwh);
           netKwh    = 0;
@@ -274,6 +334,30 @@ class PlanningEngine {
         // Still surplus → dump load (prio 3)
         if (netKwh > 0.1) {
           dumpAction = true;
+        }
+      }
+
+      // Night EV charging from battery (when solar is insufficient for EV)
+      // Only in non-solar hours (pvKwh < 0.05) and before morning peak
+      const isSolarHourLocal = pvKwh >= 0.05;
+      const isBeforeEvStart  = h < (evSolarStart ?? 10);
+      if (!isSolarHourLocal && isBeforeEvStart &&
+          canNightChargeFromBat && evNeededKwh > evCharged) {
+        const stillAvailFromBat = (batAvailableForEv ?? 0) - batEvNightCharged;
+        const canChargeFromBat  = Math.min(
+          evMinKwhPerH ?? (evMinPowerW / 1000),
+          stillAvailFromBat,
+          evNeededKwh - evCharged,
+          batKwh - (batReserveKwh ?? 0),
+          batMaxDischargeKw ?? Infinity
+        );
+        if (canChargeFromBat > 0.05) {
+          batAction        = 'ev_night_discharge';
+          batDelta         = -canChargeFromBat;
+          batKwh           = Math.max(batReserveKwh ?? 0, batKwh - canChargeFromBat);
+          evAction         = true;
+          evCharged       += canChargeFromBat;
+          batEvNightCharged += canChargeFromBat;
         }
       }
 
@@ -286,9 +370,11 @@ class PlanningEngine {
       //
       // When the EV is NOT charging, the battery may discharge as normal to cover
       // house consumption even during solar hours (e.g. a very cloudy morning).
-      const isSolarHour = pvKwh >= 0.1;
-      const blockDischarge = isSolarHour && evAction;   // cloud-dip guard: solar + EV charging
-      if (netKwh < -0.05 && !blockDischarge) {
+      const isSolarHour    = pvKwh >= 0.1;
+      // Block battery discharge during solar hours when EV is charging (cloud-dip guard)
+      // But allow discharge from battery reserve when it's a night-ev slot (already handled above)
+      const blockDischarge = isSolarHour && evAction && batAction !== 'ev_night_discharge';
+      if (netKwh < -0.05 && !blockDischarge && batAction !== 'ev_night_discharge') {
         const canDischarge = Math.min(Math.abs(netKwh), batKwh - batMinKwh, batMaxDischargeKw ?? Infinity);
         if (canDischarge > 0.05) {
           batAction = 'discharge';
