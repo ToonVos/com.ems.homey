@@ -33,8 +33,10 @@ class PlanningEngine {
   constructor(app) {
     this.app          = app;
     this.homey        = app.homey;
-    this._plan        = null;
-    this._timer       = null;
+    this._planToday    = null;  // operational plan for today (drives realtime control)
+    this._planTomorrow = null;  // preview plan for tomorrow (shown in EMS Morgen widget)
+    this._plan         = null;  // backwards compat alias → always most recent
+    this._timer        = null;
   }
 
   init({ pvCurve, openMeteo, dayAheadPrices, consumptionLearner, tripPlanner, config }) {
@@ -62,7 +64,13 @@ class PlanningEngine {
     if (this._timer) { this.homey.clearTimeout(this._timer); this._timer = null; }
   }
 
-  getCurrentPlan() { return this._plan; }
+  getCurrentPlan()  { return this._planTomorrow ?? this._plan; }  // EMS Morgen widget: always tomorrow
+  getTodayPlan()    { return this._planToday ?? this._plan; }     // EMS Vandaag overlay + realtime control
+  getOperationalPlan() {
+    // For realtime control: use today's plan during the day, tomorrow's after 19:00
+    const h = new Date().getHours();
+    return h >= 19 ? (this._planTomorrow ?? this._plan) : (this._planToday ?? this._plan);
+  }
 
   // ─── Plan calculation ─────────────────────────────────────────────────────
 
@@ -240,7 +248,7 @@ class PlanningEngine {
       const hoursToFull  = batMaxChargeKw   > 0 ? +Math.max(0, (batMaxKwh - batAvailKwh) / batMaxChargeKw).toFixed(1)   : null;
       const hoursToEmpty = batMaxDischargeKw > 0 ? +Math.max(0, (batAvailKwh - batMinKwh) / batMaxDischargeKw).toFixed(1) : null;
 
-      this._plan = {
+      const newPlan = {
         date:           targetDate.toISOString().substring(0, 10),
         target,
         calculatedAt:   new Date().toISOString(),
@@ -279,12 +287,20 @@ class PlanningEngine {
         );
       }
 
-      // Trigger Flow if prio 1 not feasible
-      if (!prio1Feasible) {
-        this.homey.emit('ems:prio1NotFeasible', this._plan.summary);
+      // Store in the right slot based on target
+      this._plan = newPlan;  // backwards compat
+      if (target === 'today') {
+        this._planToday = newPlan;
+      } else {
+        this._planTomorrow = newPlan;
       }
 
-      return this._plan;
+      // Trigger Flow if prio 1 not feasible
+      if (!prio1Feasible) {
+        this.homey.emit('ems:prio1NotFeasible', newPlan.summary);
+      }
+
+      return newPlan;
     } catch (err) {
       this._lastError = err.message ?? String(err);
       this.app.error('[Planning] recalculate error:', err);

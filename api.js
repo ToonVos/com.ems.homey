@@ -46,8 +46,16 @@ module.exports = {
   },
 
   async getPlan({ homey }) {
+    // Always returns tomorrow's plan for EMS Morgen widget
     return homey.app.ems.planningEngine
       ? homey.app.ems.planningEngine.getCurrentPlan()
+      : null;
+  },
+
+  async getTodayPlan({ homey }) {
+    // Returns today's plan for EMS Vandaag forecast overlay
+    return homey.app.ems.planningEngine
+      ? homey.app.ems.planningEngine.getTodayPlan()
       : null;
   },
 

@@ -12,6 +12,12 @@ module.exports = {
       : null;
   },
 
+  async getTodayPlan({ homey }) {
+    return homey.app.ems.planningEngine
+      ? homey.app.ems.planningEngine.getTodayPlan()
+      : null;
+  },
+
   async getActuals({ homey }) {
     const now  = new Date();
     const year = now.getFullYear();

@@ -231,7 +231,8 @@
 
     async function refreshPlan() {
       try {
-        const plan = await Homey.api('GET', '/getPlan', {});
+        // Use today's plan for forecast overlay in EMS Vandaag
+        const plan = await Homey.api('GET', '/getTodayPlan', {});
         if (plan?.schedule) {
           planForecast = plan.schedule.map(s => Math.round((s.pvKwh ?? 0) * 1000));
         }
