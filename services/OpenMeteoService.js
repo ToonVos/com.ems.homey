@@ -73,20 +73,29 @@ class OpenMeteoService {
     const url = `${OPEN_METEO_URL}?${params}`;
     this.app.log(`[OpenMeteo] Fetching forecast...`);
 
-    try {
-      const res  = await fetch(url, { signal: AbortSignal.timeout(8000) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+    // Try up to 2 times — first attempt may fail if network isn't ready yet (startup)
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const res  = await fetch(url, { signal: AbortSignal.timeout(15000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
 
-      const parsed = this._parse(data);
-      this._cache     = parsed;
-      this._cacheTime = now;
-      this.app.log(`[OpenMeteo] Forecast fetched. Tomorrow: max ${parsed.tomorrow.dayMax}°C, cloud ${parsed.tomorrow.avgCloudPct}%`);
-      return parsed;
-    } catch (err) {
-      this.app.error('[OpenMeteo] Fetch error:', err.message);
-      this.app.notifications?.send(`❌ Weersdata ophalen mislukt: ${err.message.slice(0, 60)} — fallback gebruikt`);
-      return this._fallback();
+        const parsed = this._parse(data);
+        this._cache     = parsed;
+        this._cacheTime = now;
+        this.app.log(`[OpenMeteo] Forecast fetched (poging ${attempt}). Morgen: max ${parsed.tomorrow.dayMax}°C, bewolking ${parsed.tomorrow.avgCloudPct}%`);
+        return parsed;
+      } catch (err) {
+        this.app.error(`[OpenMeteo] Fetch fout (poging ${attempt}):`, err.message);
+        if (attempt < 2) {
+          this.app.log('[OpenMeteo] Herprobeert in 10s...');
+          await new Promise(r => setTimeout(r, 10_000));
+        } else {
+          // Only notify after both attempts failed — avoid spam on transient timeouts
+          this.app.notifications?.send(`❌ Weersdata ophalen mislukt na 2 pogingen: ${err.message.slice(0, 50)}`);
+          return this._fallback();
+        }
+      }
     }
   }
 
