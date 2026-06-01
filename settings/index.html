@@ -211,13 +211,7 @@
               pre.style.display = 'block';
               document.getElementById('resultWrap').style.display = 'block';
               // Copy
-              if (navigator.clipboard) {
-                navigator.clipboard.writeText(text).catch(function(){});
-              } else {
-                var ta = document.createElement('textarea');
-                ta.value = text; document.body.appendChild(ta); ta.select();
-                document.execCommand('copy'); document.body.removeChild(ta);
-              }
+              copyToClipboard(text);
               btnCS.textContent = '✓ Gekopieerd';
               setTimeout(function(){ btnCS.textContent = '📋 Kopieer instellingen'; }, 1500);
             });
@@ -369,6 +363,19 @@
         if (h === defaultVal) opt.selected = true;
         sel.appendChild(opt);
       }
+    }
+
+    function copyToClipboard(text) {
+      // navigator.clipboard only works on HTTPS; Homey settings run on HTTP
+      // Use execCommand fallback with properly positioned textarea (required for Mac/Safari)
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;border:none;padding:0;margin:0;';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      try { document.execCommand('copy'); } catch(e) {}
+      document.body.removeChild(ta);
     }
 
     function showSaved() {
@@ -836,7 +843,7 @@
       </button>
     </div>
     <div id="resultWrap" style="display:none;position:relative">
-      <button id="btnCopyResult" onclick="(function(){var t=document.getElementById('weatherResult').textContent;if(navigator.clipboard){navigator.clipboard.writeText(t).catch(function(){});}else{var ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);}document.getElementById('btnCopyResult').textContent='✓ Gekopieerd';setTimeout(function(){document.getElementById('btnCopyResult').textContent='📋 Kopieer';},1500);})()" style="position:absolute;top:8px;right:8px;padding:3px 10px;font-size:11px;background:#1a73e8;color:#fff;border:none;border-radius:6px;cursor:pointer">📋 Kopieer</button>
+      <button id="btnCopyResult" onclick="(function(){var t=document.getElementById('weatherResult').textContent;copyToClipboard(t);document.getElementById('btnCopyResult').textContent='✓ Gekopieerd';setTimeout(function(){document.getElementById('btnCopyResult').textContent='📋 Kopieer';},1500);})()" style="position:absolute;top:8px;right:8px;padding:3px 10px;font-size:11px;background:#1a73e8;color:#fff;border:none;border-radius:6px;cursor:pointer">📋 Kopieer</button>
       <pre id="weatherResult" style="background:#f8f9fa;border:1px solid #e0e0e0;border-radius:8px;padding:12px 12px 12px;font-size:11px;overflow-x:auto;white-space:pre-wrap;line-height:1.5;user-select:text;-webkit-user-select:text"></pre>
     </div>
   </div>
