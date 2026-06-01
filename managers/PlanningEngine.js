@@ -248,8 +248,12 @@ class PlanningEngine {
       const hoursToFull  = batMaxChargeKw   > 0 ? +Math.max(0, (batMaxKwh - batAvailKwh) / batMaxChargeKw).toFixed(1)   : null;
       const hoursToEmpty = batMaxDischargeKw > 0 ? +Math.max(0, (batAvailKwh - batMinKwh) / batMaxDischargeKw).toFixed(1) : null;
 
+      // Use local date (not UTC) to match Amsterdam timezone
+      const _y = targetDate.getFullYear();
+      const _m = String(targetDate.getMonth()+1).padStart(2,'0');
+      const _d = String(targetDate.getDate()).padStart(2,'0');
       const newPlan = {
-        date:           targetDate.toISOString().substring(0, 10),
+        date:           `${_y}-${_m}-${_d}`,
         target,
         calculatedAt:   new Date().toISOString(),
         reason,

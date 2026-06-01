@@ -180,9 +180,11 @@ module.exports = {
         lastCommandAgo:  ev ? Math.round((Date.now() - ev._lastCommandTime) / 1000) + 's geleden' : 'n/a',
         inPeakHour:      ctrl?.isPeakHour() ?? false,
         postponedUntil:  ev ? (Date.now() < ctrl._evPostponedUntil ? new Date(ctrl._evPostponedUntil).toLocaleTimeString('nl-NL') : 'niet uitgesteld') : 'n/a',
-        verdict: surplus >= minPowerW
-          ? (evState?.connected ? '✅ Zou moeten laden — check flows' : '❌ EV niet verbonden')
-          : `⏳ Surplus ${Math.round(surplus)}W < drempel ${minPowerW}W — wacht op meer zon`,
+        verdict: ctrl?.isPeakHour()
+          ? `🚫 Piekblok actief — EV geblokkeerd tot ${ctrl._peak2End ?? 21}:00`
+          : surplus >= minPowerW
+            ? (evState?.connected ? '✅ Zou moeten laden — check flows' : '❌ EV niet verbonden')
+            : `⏳ Surplus ${Math.round(surplus)}W < drempel ${minPowerW}W — wacht op meer zon`,
       };
     } catch (e) {
       return { ok: false, error: e.message };
@@ -196,7 +198,10 @@ module.exports = {
 
       const target = new Date().getHours() >= 19 ? 'tomorrow' : 'today';
       await homey.app.ems.planningEngine.recalculate('manual_test', target);
-      const plan = homey.app.ems.planningEngine.getCurrentPlan();
+      // Return the plan we just calculated (not always tomorrow's plan)
+      const plan = target === 'tomorrow'
+        ? homey.app.ems.planningEngine._planTomorrow
+        : homey.app.ems.planningEngine._planToday;
 
       if (!plan) return {
         ok: false,
