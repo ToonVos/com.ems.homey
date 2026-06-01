@@ -261,15 +261,11 @@
         else if (bw<-50) mBat.textContent='↑ '+fmtWFull(Math.abs(bw));
         else             mBat.textContent='≈ 0';
         set('mSoc', soc.toFixed(0)+'%');
-        // EV tile: show live W when charging, else total kWh charged today
-        if (s.evCharging) {
-          set('mEv', fmtWFull(s.evW??0));
-        } else {
-          const evKwh = actuals.reduce(function(sum, d) {
-            return sum + (d && d.evW > 0 ? d.evW * 10/60/1000 : 0);
-          }, 0);
-          set('mEv', evKwh > 0.05 ? (evKwh.toFixed(1) + ' kWh') : '–');
-        }
+        // EV tile: altijd totaal kWh geladen vandaag tonen
+        const evKwh = actuals.reduce(function(sum, d) {
+          return sum + (d && d.evW > 0 ? d.evW * 10/60/1000 : 0);
+        }, 0);
+        set('mEv', evKwh > 0.05 ? (evKwh.toFixed(1) + ' kWh') : (s.evCharging ? fmtWFull(s.evW??0) : '–'));
         const planEl=$id('planStatus');
         if (planEl&&s.plan) {
           if (s.plan.prio1Feasible) { planEl.textContent='✓ Plan morgen haalbaar'; planEl.className='plan-ok'; }
