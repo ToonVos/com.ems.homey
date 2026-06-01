@@ -193,6 +193,37 @@
         });
       }
 
+      var btnCS = document.getElementById('btnCopySettings');
+      if (btnCS) {
+        btnCS.addEventListener('click', function() {
+          var allKeys = BEHAVIOR_KEYS.concat(DEVICE_ID_KEYS).concat([
+            'ev_home_mon','ev_home_tue','ev_home_wed','ev_home_thu',
+            'ev_home_fri','ev_home_sat','ev_home_sun',
+            'hp_0_id','hp_0_phase','hp_1_id','hp_1_phase','hp_2_id','hp_2_phase',
+          ]);
+          Promise.all(allKeys.map(function(k){ return Homey.get(k).then(function(v){ return [k,v]; }); }))
+            .then(function(pairs) {
+              var obj = {};
+              pairs.forEach(function(p){ if (p[1] != null) obj[p[0]] = p[1]; });
+              var text = JSON.stringify(obj, null, 2);
+              var pre = document.getElementById('weatherResult');
+              pre.textContent = text;
+              pre.style.display = 'block';
+              document.getElementById('resultWrap').style.display = 'block';
+              // Copy
+              if (navigator.clipboard) {
+                navigator.clipboard.writeText(text).catch(function(){});
+              } else {
+                var ta = document.createElement('textarea');
+                ta.value = text; document.body.appendChild(ta); ta.select();
+                document.execCommand('copy'); document.body.removeChild(ta);
+              }
+              btnCS.textContent = '✓ Gekopieerd';
+              setTimeout(function(){ btnCS.textContent = '📋 Kopieer instellingen'; }, 1500);
+            });
+        });
+      }
+
       // 6. Change handlers
       document.querySelectorAll('input, select').forEach(function(el) {
         el.addEventListener('change', function() {
@@ -799,6 +830,9 @@
       </button>
       <button id="btnEvDiag" style="padding:9px 16px;background:#f97316;color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer">
         🚗 EV diagnose
+      </button>
+      <button id="btnCopySettings" style="padding:9px 16px;background:#8b5cf6;color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer">
+        📋 Kopieer instellingen
       </button>
     </div>
     <div id="resultWrap" style="display:none;position:relative">
