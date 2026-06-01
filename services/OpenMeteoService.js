@@ -34,7 +34,9 @@ class OpenMeteoService {
   init(config) {
     this.lat = config.lat ?? 52.3;
     this.lon = config.lon ?? 4.9;
-    this.app.log(`[OpenMeteo] Location: ${this.lat}, ${this.lon}`);
+    // Use Homey's configured timezone (not hardcoded)
+    this.tz  = this.homey.clock?.getTimezone?.() ?? 'Europe/Amsterdam';
+    this.app.log(`[OpenMeteo] Location: ${this.lat}, ${this.lon} | Timezone: ${this.tz}`);
   }
 
   // ─── Main fetch ───────────────────────────────────────────────────────────
@@ -227,24 +229,21 @@ class OpenMeteoService {
     };
   }
 
-  _amsterdamDateStr(date = new Date()) {
-    // Homey runs Node.js in UTC — use Intl to get Amsterdam local date
-    const local = new Date(date.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+  _localDateStr(date = new Date()) {
+    const tz    = this.tz ?? 'Europe/Amsterdam';
+    const local = new Date(date.toLocaleString('en-US', { timeZone: tz }));
     const y = local.getFullYear();
     const m = String(local.getMonth() + 1).padStart(2, '0');
     const d = String(local.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
   }
 
-  _todayStr()    { return this._amsterdamDateStr(); }
+  _todayStr()    { return this._localDateStr(); }
   _tomorrowStr() {
-    // Add 1 day in Amsterdam local time
-    const local = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+    const tz    = this.tz ?? 'Europe/Amsterdam';
+    const local = new Date(new Date().toLocaleString('en-US', { timeZone: tz }));
     local.setDate(local.getDate() + 1);
-    const y = local.getFullYear();
-    const m = String(local.getMonth() + 1).padStart(2, '0');
-    const d = String(local.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
+    return this._localDateStr(local);
   }
   _avg(arr) {
     if (!arr || arr.length === 0) return 0;

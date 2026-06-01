@@ -371,10 +371,10 @@ class EmsManager {
    * Get Amsterdam local date/time — works even when Node.js runs in UTC timezone (Homey).
    * Uses Intl trick: parse the localized string back as a Date to get correct local values.
    */
-  _getAmsterdamLocal(date = new Date()) {
-    // toLocaleString('en-US', {timeZone}) returns Amsterdam wall-clock time as a string
-    // Parsing it back gives a Date whose getHours()/getDate() match Amsterdam local time
-    const local = new Date(date.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+  _getLocalTime(date = new Date()) {
+    // Use Homey's configured timezone (not hardcoded) so the app works worldwide
+    const tz    = this.homey.clock.getTimezone?.() ?? 'Europe/Amsterdam';
+    const local = new Date(date.toLocaleString('en-US', { timeZone: tz }));
     const y = local.getFullYear();
     const m = String(local.getMonth() + 1).padStart(2, '0');
     const d = String(local.getDate()).padStart(2, '0');
@@ -384,14 +384,17 @@ class EmsManager {
       day:     d,
       hour:    local.getHours(),
       minute:  local.getMinutes(),
-      dateStr: `${y}${m}${d}`,           // YYYYMMDD
-      dateISO: `${y}-${m}-${d}`,         // YYYY-MM-DD
+      dateStr: `${y}${m}${d}`,
+      dateISO: `${y}-${m}-${d}`,
     };
   }
 
-  /** Local date string YYYYMMDD (Amsterdam timezone) */
+  /** @deprecated use _getLocalTime */
+  _getAmsterdamLocal(date = new Date()) { return this._getLocalTime(date); }
+
+  /** Local date string YYYYMMDD (Homey configured timezone) */
   _localDateStr(date = new Date()) {
-    return this._getAmsterdamLocal(date).dateStr;
+    return this._getLocalTime(date).dateStr;
   }
 
   /**

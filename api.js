@@ -19,8 +19,9 @@ module.exports = {
   },
 
   async getActuals({ homey }) {
-    // Use Amsterdam local date (Homey runs Node.js in UTC timezone)
-    const local = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+    // Use Homey's configured timezone (not hardcoded — works worldwide)
+    const tz    = homey.clock?.getTimezone?.() ?? 'Europe/Amsterdam';
+    const local = new Date(new Date().toLocaleString('en-US', { timeZone: tz }));
     const year  = local.getFullYear();
     const mon   = String(local.getMonth() + 1).padStart(2, '0');
     const day   = String(local.getDate()).padStart(2, '0');
