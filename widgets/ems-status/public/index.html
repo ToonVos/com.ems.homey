@@ -109,6 +109,11 @@
       <span class="sum-val" id="sBatAvail" style="color:#eab308">–</span>
       <span class="sum-unit">kWh accu</span>
     </div>
+    <span class="sep">·</span>
+    <div class="sum-item">
+      <span class="sum-val" id="sConsumption" style="color:#ef4444">–</span>
+      <span class="sum-unit">kWh verbruik</span>
+    </div>
     <span class="ev-tag" id="evTag" style="display:none">⚡ <span id="evWindow">–</span></span>
   </div>
 
@@ -278,9 +283,10 @@
         badge.textContent = sum.prio1Feasible ? '✓ Haalbaar' : '⚠ Krap';
         badge.className   = sum.prio1Feasible ? 'badge-ok' : 'badge-warn';
 
-        set('sTotPv',    fmtKwh(sum.totalPvKwh));
-        set('sEvNeeded', fmtKwh(sum.evNeededKwh));
-        set('sBatAvail', fmtKwh(sum.batAvailKwh));
+        set('sTotPv',       fmtKwh(sum.totalPvKwh));
+        set('sEvNeeded',    fmtKwh(sum.evNeededKwh));
+        set('sBatAvail',    fmtKwh(sum.batAvailKwh));
+        set('sConsumption', fmtKwh(sum.totalConsumptionKwh));
 
         const evWin = evWindow(plan.schedule);
         if (evWin && sum.evNeededKwh > 0) { set('evWindow', evWin); show('evTag', true); }
