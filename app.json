@@ -843,6 +843,10 @@
     "getEvDiag": {
       "method": "GET",
       "path": "/getEvDiag"
+    },
+    "getTodayPlan": {
+      "method": "GET",
+      "path": "/getTodayPlan"
     }
   }
 }
