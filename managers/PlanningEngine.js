@@ -111,11 +111,28 @@ class PlanningEngine {
 
       // 4. Expected consumption per hour
       // Prefer rolling 3-day day load (EV excluded) over consumptionLearner.
-      const rollingDayLoad = this.app.ems.getRollingDayLoad?.();
+      const rollingDayLoad  = this.app.ems.getRollingDayLoad?.();
+      const rollingNightAvg = this.app.ems.getRollingNightLoad?.() ?? 2.0;
       const dow = targetDate.getDay();
-      const consumptionHourly = rollingDayLoad
-        ? rollingDayLoad.map((kwh, h) => ({ hour: h, expectedKwh: kwh }))
-        : await this.consumptionLearner.getExpectedHourly(dow);
+
+      let consumptionHourly;
+      if (rollingDayLoad) {
+        // Supplement night hours (day_load = 0) with hourly night average
+        // Estimate: night spans ~sunsetH to 24 + 0 to sunriseH ≈ 8-9 hours
+        const sunTimes2   = this.pvCurve.getSunTimes(targetDate);
+        const srH2        = Math.ceil(sunTimes2.sunriseH);
+        const ssH2        = Math.floor(sunTimes2.sunsetH);
+        const nightHrsCnt = Math.max(1, (24 - ssH2) + srH2);
+        const nightHrKwh  = rollingNightAvg / nightHrsCnt;
+
+        consumptionHourly = rollingDayLoad.map((kwh, h) => ({
+          hour: h,
+          // Use day load during solar hours; night average for dark hours
+          expectedKwh: kwh > 0 ? kwh : (h < srH2 || h >= ssH2 ? nightHrKwh : 0),
+        }));
+      } else {
+        consumptionHourly = await this.consumptionLearner.getExpectedHourly(dow);
+      }
       const totalConsumptionKwh = consumptionHourly.reduce((s, h) => s + h.expectedKwh, 0);
 
       // 5. Battery params
