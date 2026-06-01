@@ -346,15 +346,11 @@ class EmsManager {
    * 144 slots per day (24 h × 6 slots).
    */
   _recordActuals(state) {
-    const now   = new Date();
-    // Local date — avoid toISOString() which gives UTC and can mismatch getHours() at midnight
-    const year  = now.getFullYear();
-    const mon   = String(now.getMonth() + 1).padStart(2, '0');
-    const day   = String(now.getDate()).padStart(2, '0');
-    const date  = `${year}${mon}${day}`;
-    const hour  = now.getHours();
-    const slot  = Math.floor(now.getMinutes() / 10); // 0–5
-    const key   = `actuals_${date}_${hour}_${slot}`;
+    const ams  = this._getAmsterdamLocal();          // Amsterdam local time (correct on UTC Homey)
+    const date = ams.dateStr;
+    const hour = ams.hour;
+    const slot = Math.floor(ams.minute / 10);        // 0–5
+    const key  = `actuals_${date}_${hour}_${slot}`;
 
     const cur   = this.homey.settings.get(key) || { n: 0, pvW: 0, gridW: 0, batW: 0, evW: 0 };
     const n     = cur.n + 1;
@@ -371,9 +367,31 @@ class EmsManager {
 
   // ─── Night / Day load tracking ───────────────────────────────────────────
 
-  /** Local date string YYYYMMDD */
+  /**
+   * Get Amsterdam local date/time — works even when Node.js runs in UTC timezone (Homey).
+   * Uses Intl trick: parse the localized string back as a Date to get correct local values.
+   */
+  _getAmsterdamLocal(date = new Date()) {
+    // toLocaleString('en-US', {timeZone}) returns Amsterdam wall-clock time as a string
+    // Parsing it back gives a Date whose getHours()/getDate() match Amsterdam local time
+    const local = new Date(date.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+    const y = local.getFullYear();
+    const m = String(local.getMonth() + 1).padStart(2, '0');
+    const d = String(local.getDate()).padStart(2, '0');
+    return {
+      year:    y,
+      month:   m,
+      day:     d,
+      hour:    local.getHours(),
+      minute:  local.getMinutes(),
+      dateStr: `${y}${m}${d}`,           // YYYYMMDD
+      dateISO: `${y}-${m}-${d}`,         // YYYY-MM-DD
+    };
+  }
+
+  /** Local date string YYYYMMDD (Amsterdam timezone) */
   _localDateStr(date = new Date()) {
-    return `${date.getFullYear()}${String(date.getMonth()+1).padStart(2,'0')}${String(date.getDate()).padStart(2,'0')}`;
+    return this._getAmsterdamLocal(date).dateStr;
   }
 
   /**
@@ -434,11 +452,12 @@ class EmsManager {
   computeDayLoad() {
     try {
       const now      = new Date();
+      const ams      = this._getAmsterdamLocal(now);
       const sun      = this.pvCurve.getSunTimes(now);
-      const todayStr = this._localDateStr(now);
+      const todayStr = ams.dateStr;
       const sunriseH = Math.ceil(sun.sunriseH);
       const sunsetH  = Math.floor(sun.sunsetH);
-      const nowH     = now.getHours();
+      const nowH     = ams.hour;
 
       const hourlyKwh = Array(24).fill(0);
 

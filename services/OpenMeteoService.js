@@ -227,18 +227,24 @@ class OpenMeteoService {
     };
   }
 
-  _localDateStr(date = new Date()) {
-    // Use local date (not UTC) to match Open-Meteo Amsterdam timezone strings
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
+  _amsterdamDateStr(date = new Date()) {
+    // Homey runs Node.js in UTC — use Intl to get Amsterdam local date
+    const local = new Date(date.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+    const y = local.getFullYear();
+    const m = String(local.getMonth() + 1).padStart(2, '0');
+    const d = String(local.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
   }
 
-  _todayStr()    { return this._localDateStr(); }
+  _todayStr()    { return this._amsterdamDateStr(); }
   _tomorrowStr() {
-    const d = new Date(); d.setDate(d.getDate() + 1);
-    return this._localDateStr(d);
+    // Add 1 day in Amsterdam local time
+    const local = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+    local.setDate(local.getDate() + 1);
+    const y = local.getFullYear();
+    const m = String(local.getMonth() + 1).padStart(2, '0');
+    const d = String(local.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
   }
   _avg(arr) {
     if (!arr || arr.length === 0) return 0;

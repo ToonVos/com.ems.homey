@@ -19,12 +19,12 @@ module.exports = {
   },
 
   async getActuals({ homey }) {
-    const now  = new Date();
-    // Use local date to match _recordActuals
-    const year = now.getFullYear();
-    const mon  = String(now.getMonth() + 1).padStart(2, '0');
-    const day  = String(now.getDate()).padStart(2, '0');
-    const date = `${year}${mon}${day}`;
+    // Use Amsterdam local date (Homey runs Node.js in UTC timezone)
+    const local = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+    const year  = local.getFullYear();
+    const mon   = String(local.getMonth() + 1).padStart(2, '0');
+    const day   = String(local.getDate()).padStart(2, '0');
+    const date  = `${year}${mon}${day}`;
 
     // 144 slots: 24 hours × 6 ten-minute slots
     const result = [];
