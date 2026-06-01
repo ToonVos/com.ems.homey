@@ -25,7 +25,9 @@ class FlowManager {
 
     // EV charging started/stopped
     this.homey.on('ems:evChargingStarted',    data    => {
-      notify(`🚗 EV laden gestart — ${data.powerW ? Math.round(data.powerW) + 'W' : '5A'} zonnestroom`);
+      const src = this.app.ems?.tesla?._isChargingByEms ? 'via EMS' : 'eigen schema';
+      const pwr = data.powerW ? Math.round(data.powerW) + 'W' : '?W';
+      notify(`🚗 EV laden gestart — ${pwr} (${src})`);
     });
 
     // EV ingeplugd → herbereken plan direct met actuele SoC

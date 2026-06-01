@@ -592,12 +592,17 @@ class TeslaEvAdapter {
     if (state.charging && !this._chargingStartFired) {
       this._chargingStartFired = true;
       this._chargingStopFired  = false;
+      this._sessionStartKwh    = state.sessionKwh ?? 0;  // snapshot at session start
       this.homey.emit('ems:evChargingStarted', { powerW: state.powerW });
     }
     if (!state.charging && !this._chargingStopFired && this._chargingStartFired) {
       this._chargingStopFired  = true;
       this._chargingStartFired = false;
-      this.homey.emit('ems:evChargingStopped', { sessionKwh: state.sessionKwh });
+      // Calculate kWh charged this session (delta, not cumulative total)
+      const sessionKwh = this._sessionStartKwh != null
+        ? Math.max(0, (state.sessionKwh ?? 0) - this._sessionStartKwh)
+        : (state.sessionKwh ?? 0);
+      this.homey.emit('ems:evChargingStopped', { sessionKwh });
     }
   }
 

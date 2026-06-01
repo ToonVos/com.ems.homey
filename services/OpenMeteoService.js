@@ -227,10 +227,18 @@ class OpenMeteoService {
     };
   }
 
-  _todayStr()    { return new Date().toISOString().substring(0, 10); }
+  _localDateStr(date = new Date()) {
+    // Use local date (not UTC) to match Open-Meteo Amsterdam timezone strings
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  _todayStr()    { return this._localDateStr(); }
   _tomorrowStr() {
     const d = new Date(); d.setDate(d.getDate() + 1);
-    return d.toISOString().substring(0, 10);
+    return this._localDateStr(d);
   }
   _avg(arr) {
     if (!arr || arr.length === 0) return 0;

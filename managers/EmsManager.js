@@ -168,7 +168,9 @@ class EmsManager {
 
       if (this.mode === 'idle') return;
 
-      const plan     = this.planningEngine.getCurrentPlan();
+      // Use operational plan: today's plan during the day, tomorrow's after 19:00
+      const plan     = this.planningEngine.getOperationalPlan?.()
+                    ?? this.planningEngine.getCurrentPlan();
       const hourSlot = plan?.schedule?.[new Date().getHours()];
 
       await this._executeTick(state, hourSlot);
