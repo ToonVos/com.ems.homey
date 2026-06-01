@@ -24,7 +24,18 @@ class FlowManager {
     this.homey.on('ems:heatpumpModeChanged',  mode    => { trigger('heatpump_mode_switched').trigger({ mode }); notify(`🌡️ Warmtepomp omgeschakeld naar ${mode === 'cooling' ? 'koelen' : 'verwarmen'}`); });
 
     // EV charging started/stopped
-    this.homey.on('ems:evChargingStarted',    data    => notify(`🚗 EV laden gestart — ${data.powerW ? Math.round(data.powerW) + 'W' : '5A'} zonnestroom`));
+    this.homey.on('ems:evChargingStarted',    data    => {
+      notify(`🚗 EV laden gestart — ${data.powerW ? Math.round(data.powerW) + 'W' : '5A'} zonnestroom`);
+    });
+
+    // EV ingeplugd → herbereken plan direct met actuele SoC
+    // Geldt ook als de auto vol genoeg is en nog niet laadt
+    this.homey.on('ems:evConnected', data => {
+      this.app.log(`[Flow] EV ingeplugd (SoC: ${data.soc ?? '?'}%) — plan herberekenen`);
+      const target = new Date().getHours() >= 19 ? 'tomorrow' : 'today';
+      this.app.ems?.planningEngine?.recalculate('ev_connected', target)
+        .catch(e => this.app.error('[Flow] ev_connected recalc:', e));
+    });
     this.homey.on('ems:evChargingStopped',    data    => { const kwh = data.sessionKwh?.toFixed(1); notify(`🔌 EV laden gestopt${kwh ? ` — ${kwh} kWh geladen` : ''}`); });
 
     // EV charge control — user wires these trigger cards to Tesla flow actions

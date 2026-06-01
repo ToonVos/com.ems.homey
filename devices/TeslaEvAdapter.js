@@ -69,13 +69,14 @@ class TeslaEvAdapter {
     // State
     this._lastVitals            = null;
     this._lastCommandTime       = 0;
-    this._lastCurrentAdjustTime = 0;    // separate timer for set_charge_amps
-    this._lastChargerPowerW     = 0;    // last measured EV charge power (W)
-    this._vehiclePresent        = true; // assume present until charger says otherwise
-    this._isChargingByEms       = false; // did EMS start this session?
-    this._commandQueue          = null;  // pending command if rate limited
+    this._lastCurrentAdjustTime = 0;
+    this._lastChargerPowerW     = 0;
+    this._vehiclePresent        = true;
+    this._isChargingByEms       = false;
+    this._commandQueue          = null;
     this._chargingStartFired    = false;
     this._chargingStopFired     = false;
+    this._connectedFired        = false; // track plug-in event
   }
 
   // ─── Init ─────────────────────────────────────────────────────────────────
@@ -159,6 +160,7 @@ class TeslaEvAdapter {
 
     this._lastVitals = vitals;
     this._detectChargingEvents(state);
+    this._detectConnectionEvent(state);
 
     return state;
   }
@@ -565,7 +567,28 @@ class TeslaEvAdapter {
 
   // ─── Event detection ──────────────────────────────────────────────────────
 
+  _detectConnectionEvent(state) {
+    // Fire once when car goes from disconnected → connected (plugged in)
+    if (state.connected && !this._wasConnected) {
+      this.app.log('[Tesla] EV ingeplugd — plan herberekenen');
+      this.homey.emit('ems:evConnected', { soc: state.soc });
+    }
+    this._wasConnected = state.connected;
+  }
+
   _detectChargingEvents(state) {
+    // Plug-in detection: EV connected but wasn't before
+    if (state.connected && !this._connectedFired) {
+      this._connectedFired = true;
+      this.homey.emit('ems:evConnected', { soc: state.soc });
+      this.app.log('[Tesla] EV aangesloten — herberekening getriggerd');
+    }
+    if (!state.connected && this._connectedFired) {
+      this._connectedFired     = false;
+      this._chargingStartFired = false;
+      this._chargingStopFired  = false;
+    }
+
     if (state.charging && !this._chargingStartFired) {
       this._chargingStartFired = true;
       this._chargingStopFired  = false;
