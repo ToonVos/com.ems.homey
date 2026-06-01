@@ -69,40 +69,43 @@ class PvCurve {
       return entry ? (entry.radiationW ?? 0) : 0;
     });
 
-    // If no per-string peak hour info: use uniform curve (original behaviour)
     const strings = this.pvStrings?.filter(s => s.peakKw > 0);
-    if (!strings || strings.length === 0 || strings.every(s => !s.peakHour)) {
+
+    // If no per-string data, or all strings have the same peak hour (south-facing),
+    // use the simple formula — it's more accurate and avoids redistribution errors.
+    const allSamePeak = !strings || strings.length === 0 ||
+      strings.every(s => (s.peakHour ?? 13) === (strings[0].peakHour ?? 13));
+
+    if (allSamePeak) {
       return radiationByHour.map((rW, h) => ({
         hour: h,
         expectedKw: Math.max(0, +((rW / STC_IRRADIANCE) * this.peakKw * SYSTEM_EFFICIENCY).toFixed(3)),
       }));
     }
 
-    // Per-string curve: each string contributes a Gaussian-weighted fraction of radiation
-    // centred on its specified peak hour. This models east/south/west orientations.
-    const totalDailyRad = radiationByHour.reduce((s, v) => s + v, 0);
+    // Per-string curve — only when strings have DIFFERENT peak hours (e.g. east + west roof).
+    // Each string gets a time-shifted fraction of the radiation.
+    // Method: for each hour, distribute radiation proportionally weighted by each string's Gaussian.
     const result = Array(24).fill(0);
+    const sigma  = 3.0; // ≈ 6h half-width
 
-    for (const str of strings) {
-      const peakHour = str.peakHour ?? 13;  // default: south-facing (solar noon ~13:00 NL)
-      const sigma    = 3.0;                  // spread ≈ 6 h half-width
-
-      // Gaussian weight for this string across the day
-      const weights = Array.from({ length: 24 }, (_, h) =>
-        Math.exp(-((h - peakHour) ** 2) / (2 * sigma ** 2))
+    // Build normalised Gaussian weights per string
+    const stringWeights = strings.map(str => {
+      const ph = str.peakHour ?? 13;
+      const w  = Array.from({ length: 24 }, (_, h) =>
+        Math.exp(-((h - ph) ** 2) / (2 * sigma ** 2))
       );
-      const wSum = weights.reduce((s, v) => s + v, 0);
+      return { str, w };
+    });
 
-      for (let h = 0; h < 24; h++) {
-        // String's hourly fraction of global radiation, shaped by its peak hour
-        const fraction = wSum > 0 ? weights[h] / wSum : 1 / 24;
-        // Scale by string's share of total daily radiation energy
-        const stringRadW = totalDailyRad > 0
-          ? radiationByHour[h] * (str.peakKw / this.peakKw) + // proportional base
-            (totalDailyRad / 24) * (fraction - 1 / 24) * str.peakKw / this.peakKw * 2
-          : 0;
-        const expectedKw = Math.max(0, (stringRadW / STC_IRRADIANCE) * str.peakKw * SYSTEM_EFFICIENCY);
-        result[h] += expectedKw;
+    for (let h = 0; h < 24; h++) {
+      const totalW    = stringWeights.reduce((s, { w }) => s + w[h], 0) || 1;
+      const radW      = radiationByHour[h];
+      for (const { str, w } of stringWeights) {
+        // This string's share of the radiation at hour h
+        const share      = w[h] / totalW;
+        const stringRadW = radW * share * (str.peakKw / this.peakKw) * strings.length;
+        result[h]       += Math.max(0, (stringRadW / STC_IRRADIANCE) * str.peakKw * SYSTEM_EFFICIENCY);
       }
     }
 
