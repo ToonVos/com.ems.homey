@@ -2,6 +2,7 @@
 
 const DeviceProfiler        = require('../devices/DeviceProfiler');
 const HomeyDeviceAdapter    = require('../devices/HomeyDeviceAdapter');   // A2 shadow
+const { normalizeBatPower, deriveGridBalance, assertConvention } = require('../services/SignConvention'); // B1
 const HomeWizardAdapter     = require('../devices/HomeWizardAdapter');
 const BatteryAdapter        = require('../devices/BatteryAdapter');
 const ThermostatAdapter     = require('../devices/ThermostatAdapter');
@@ -234,13 +235,23 @@ class EmsManager {
       this.tesla ? this.tesla.getState().catch(() => null) : Promise.resolve(null),
     ]);
 
+    // B1: EMS sign convention — see services/SignConvention.js
+    //   pvW:      + = solar into house         (always ≥ 0)
+    //   gridW:    + = grid import, − = export
+    //   batPowerW:+ = battery discharging, − = charging
+    //   evW:      magnitude only (always ≥ 0)
     const pvW    = pvPower.total;
-    const gridW  = gridPower.total; // negative = exporting to grid (surplus)
-    const surplusW = Math.max(0, -gridW);
-    const deficitW = Math.max(0,  gridW);
-    const netW     = surplusW > 0 ? surplusW : -deficitW;
+    const gridW  = gridPower.total;
+    const { surplusW, deficitW } = deriveGridBalance(gridW);
+    const netW   = surplusW > 0 ? surplusW : -deficitW;
 
-    // Measured EV charge power (from charger device or Wall Connector)
+    // Battery: normalize to EMS convention (+discharge / −charge)
+    // Most Marstek/generic inverters return + for charging — set inverted: true
+    // when the driver uses the opposite sign. Currently assuming standard sign.
+    const rawBatPowerW = batState.powerW ?? 0;
+    const batPowerW    = normalizeBatPower(rawBatPowerW, false);
+
+    // Measured EV charge power (magnitude — always ≥ 0)
     const evW = Math.round(evState?.powerW ?? 0);
 
     return {
@@ -250,7 +261,7 @@ class EmsManager {
       gridW,
       gridPhases:     gridPower.phases,
       batSoc:         batState.soc,
-      batPowerW:      batState.powerW,
+      batPowerW,                            // B1: normalized (+discharge/−charge)
       batAvailKwh:    batState.availableKwh,
       netW,
       surplusW,
