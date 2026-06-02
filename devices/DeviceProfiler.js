@@ -144,6 +144,29 @@ class DeviceProfiler {
   }
 
   /**
+   * A3 — Multi-role detection.
+   *
+   * Returns all CapabilityMaps a single device can serve.
+   * One HomeWizard meter that carries both `measure_power` (grid) and
+   * `measure_power.produced` (PV) will appear in both the 'grid_meter' and
+   * 'pv' maps so the EMS can create two HomeyDeviceAdapter instances from
+   * a single physical device without extra config.
+   *
+   * @param {string} deviceId
+   * @returns {Promise<object[]>}  array of CapabilityMaps (may be empty)
+   */
+  async allMapsForDevice(deviceId) {
+    if (!deviceId) return [];
+    const supportedRoles = ['grid_meter', 'pv']; // expand as A3/A4 progress
+    const maps = [];
+    for (const role of supportedRoles) {
+      const map = await this.toCapabilityMap(deviceId, role);
+      if (map && map.caps.power) maps.push(map);
+    }
+    return maps;
+  }
+
+  /**
    * Convert a device + role into a CapabilityMap ready for HomeyDeviceAdapter.
    *
    * The method inspects the live device capabilities and maps each semantic

@@ -105,27 +105,44 @@ class EmsManager {
       config,
     });
 
-    // ── A2 promoted: HomeyDeviceAdapter is now primary for grid + PV reading ──
+    // ── A2+A3: HomeyDeviceAdapter — one adapter per role, shared device allowed ─
+    // A3: if gridMeterId === pvMeterIds[0], one physical device serves both roles.
+    // HomeyDeviceAdapter._getCaps() caches capabilitiesObj for 5 s so two adapters
+    // on the same deviceId cause only one Homey API call per tick.
     this._gridAdapter = null;
     this._pvAdapter   = null;
     try {
-      if (config.gridMeterId) {
-        const gridMap = await this.deviceProfiler.toCapabilityMap(config.gridMeterId, 'grid_meter');
-        if (gridMap) {
-          this._gridAdapter = new HomeyDeviceAdapter(this.app, gridMap);
-          this.app.log(`[A2] Grid meter: HomeyDeviceAdapter (${config.gridMeterId})`);
+      const firstPvId    = (config.pvMeterIds || [])[0];
+      const sameDevice   = config.gridMeterId && config.gridMeterId === firstPvId;
+
+      if (sameDevice) {
+        // A3: one physical device covers both roles — log it clearly
+        const maps = await this.deviceProfiler.allMapsForDevice(config.gridMeterId);
+        for (const map of maps) {
+          const adapter = new HomeyDeviceAdapter(this.app, map);
+          if (map.role === 'grid_meter') this._gridAdapter = adapter;
+          if (map.role === 'pv')         this._pvAdapter   = adapter;
         }
-      }
-      const firstPvId = (config.pvMeterIds || [])[0];
-      if (firstPvId) {
-        const pvMap = await this.deviceProfiler.toCapabilityMap(firstPvId, 'pv');
-        if (pvMap) {
-          this._pvAdapter = new HomeyDeviceAdapter(this.app, pvMap);
-          this.app.log(`[A2] PV meter: HomeyDeviceAdapter (${firstPvId})`);
+        this.app.log(`[A3] Single device serves grid+PV roles (${config.gridMeterId})`);
+      } else {
+        // Separate devices per role (normal case)
+        if (config.gridMeterId) {
+          const gridMap = await this.deviceProfiler.toCapabilityMap(config.gridMeterId, 'grid_meter');
+          if (gridMap) {
+            this._gridAdapter = new HomeyDeviceAdapter(this.app, gridMap);
+            this.app.log(`[A2] Grid meter: HomeyDeviceAdapter (${config.gridMeterId})`);
+          }
+        }
+        if (firstPvId) {
+          const pvMap = await this.deviceProfiler.toCapabilityMap(firstPvId, 'pv');
+          if (pvMap) {
+            this._pvAdapter = new HomeyDeviceAdapter(this.app, pvMap);
+            this.app.log(`[A2] PV meter: HomeyDeviceAdapter (${firstPvId})`);
+          }
         }
       }
     } catch (err) {
-      this.app.error('[A2] Init error — falling back to HomeWizardAdapter:', err.message);
+      this.app.error('[A2/A3] Init error — falling back to HomeWizardAdapter:', err.message);
     }
 
     // Start control loop
