@@ -43,6 +43,21 @@
  *   },
  * }
  *
+ * A4 — Compositing expressions (caps values can be objects instead of strings):
+ *
+ *   calc — derive a numeric value from one or more capabilities:
+ *     { calc: 'sub',    sources: ['measure_power.import', 'measure_power.export'] }
+ *     { calc: 'add',    sources: ['measure_power.l1', 'measure_power.l2', 'measure_power.l3'] }
+ *     { calc: 'scale',  source: 'measure_power', factor: 1000 }   // kW → W
+ *     { calc: 'negate', source: 'measure_power' }
+ *
+ *   combined — derive a status string from a threshold:
+ *     { combined: 'threshold', source: 'measure_power',
+ *       threshold: 50, above: 'charging', below: 'idle' }
+ *
+ *   sequence — write to multiple capabilities in order (write path):
+ *     { sequence: ['onoff', 'battery_charging_enabled'] }
+ *
  * Semantic slot names (caps keys) per role:
  *
  *   grid_meter : power, power_l1, power_l2, power_l3

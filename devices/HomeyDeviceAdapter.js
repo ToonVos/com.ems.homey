@@ -3,24 +3,42 @@
 const PowerSource = require('../interfaces/PowerSource');
 
 /**
- * HomeyDeviceAdapter  (A2 — declarative capability-map)
- * ──────────────────────────────────────────────────────
- * Generic adapter that reads any Homey device using a CapabilityMap instead of
- * brand-specific code.  A new meter or inverter brand only needs a config entry,
- * not a new class.
+ * HomeyDeviceAdapter  (A2/A3/A4 — declarative capability-map)
+ * ─────────────────────────────────────────────────────────────
+ * Generic adapter that reads (and writes) any Homey device using a
+ * CapabilityMap instead of brand-specific code.
  *
- * In this release the adapter covers the read-only PowerSource interface for
- * roles 'grid_meter' and 'pv'.  Write-capable roles (battery, ev_charger,
- * thermostat) will be added in subsequent steps once the shadow validation
- * confirms the read side is stable.
+ * A4 adds three compositing patterns as inline expressions in the map.
+ * All three are backwards-compatible: plain string caps still work unchanged.
  *
- * Usage (shadow mode — A2 only reads, does not steer):
- *   const adapter = new HomeyDeviceAdapter(app, {
- *     role:     'grid_meter',
- *     deviceId: 'f081316a-...',
- *     caps: { power: 'measure_power', power_l1: 'measure_power.phase_1', ... },
- *   });
- *   const gridW = await adapter.getPowerW();
+ * ── calc ──────────────────────────────────────────────────────────────────
+ * Derive a numeric value from one or more capabilities.
+ *
+ *   { calc: 'sub',    sources: ['measure_power.import', 'measure_power.export'] }
+ *     → import − export   (handy when net = two separate caps)
+ *
+ *   { calc: 'add',    sources: ['measure_power.l1', 'measure_power.l2', ...] }
+ *     → sum of all sources
+ *
+ *   { calc: 'scale',  source: 'measure_power', factor: 1000 }
+ *     → value × factor   (e.g. kW → W)
+ *
+ *   { calc: 'negate', source: 'measure_power' }
+ *     → −value           (flip sign convention)
+ *
+ * ── combined ──────────────────────────────────────────────────────────────
+ * Derive a status string from a numeric capability.  Useful for generic
+ * charge points without a dedicated status capability.
+ *
+ *   { combined: 'threshold', source: 'measure_power',
+ *     threshold: 50, above: 'charging', below: 'idle' }
+ *     → 'charging' when power > 50 W, otherwise 'idle'
+ *
+ * ── sequence ──────────────────────────────────────────────────────────────
+ * Execute multiple write actions in a fixed order when a slot is set.
+ *
+ *   { sequence: ['onoff', 'battery_charging_enabled'] }
+ *     → sets both capabilities in order when enable(true/false) is called
  *
  * @see interfaces/CapabilityMap.js  for the full map format.
  */
@@ -34,53 +52,33 @@ class HomeyDeviceAdapter extends PowerSource {
     super();
     this.app      = app;
     this.homey    = app.homey;
-    this._map     = map;          // { role, deviceId, caps }
-    this._cache   = null;         // last capabilitiesObj from getDevice()
-    this._cacheTs = 0;            // timestamp of last cache fill
-    this._cacheTTL = 5_000;       // ms — reuse caps within same tick
+    this._map     = map;
+    this._cache   = null;
+    this._cacheTs = 0;
+    this._cacheTTL = 5_000;   // ms — reuse capabilitiesObj within same tick
   }
 
   // ─── PowerSource implementation ──────────────────────────────────────────
 
-  /**
-   * Returns total power in Watts from caps.power.
-   * Sign is preserved as-is from the capability value.
-   * @returns {Promise<number>}
-   */
   async getPowerW() {
     const caps = await this._getCaps();
-    const capName = this._map.caps?.power;
-    if (!capName) return 0;
-    return caps?.[capName]?.value ?? 0;
+    return this._resolveSlot(caps, 'power');
   }
 
-  /**
-   * Returns per-phase power [L1, L2, L3] in Watts.
-   * Any missing phase defaults to 0.
-   * @returns {Promise<number[]>}
-   */
   async getPhasesW() {
     const caps = await this._getCaps();
     return [
-      this._readCap(caps, 'power_l1'),
-      this._readCap(caps, 'power_l2'),
-      this._readCap(caps, 'power_l3'),
+      this._resolveSlot(caps, 'power_l1'),
+      this._resolveSlot(caps, 'power_l2'),
+      this._resolveSlot(caps, 'power_l3'),
     ];
   }
 
-  /**
-   * Returns { total, phases } — same shape as HomeWizardAdapter.getGridPower()
-   * and HomeWizardAdapter.getPvPower(), making drop-in comparison easy.
-   * @returns {Promise<{ total: number, phases: number[], hasPhaseData: boolean }>}
-   */
+  /** Returns { total, phases, hasPhaseData } — same shape as HomeWizardAdapter */
   async getPowerFull() {
     const total  = await this.getPowerW();
     const phases = await this.getPhasesW();
-    return {
-      total,
-      phases,
-      hasPhaseData: phases.some(p => p !== 0),
-    };
+    return { total, phases, hasPhaseData: phases.some(p => p !== 0) };
   }
 
   // ─── Role accessor ────────────────────────────────────────────────────────
@@ -88,17 +86,118 @@ class HomeyDeviceAdapter extends PowerSource {
   get role()     { return this._map.role;     }
   get deviceId() { return this._map.deviceId; }
 
-  // ─── Private helpers ──────────────────────────────────────────────────────
+  // ─── A4: compositing helpers ──────────────────────────────────────────────
 
   /**
-   * Returns capabilitiesObj, cached for _cacheTTL ms so repeated reads
-   * within a single tick don't hammer the Homey API.
+   * Resolve a slot from the cap map to a value.
+   * Handles: plain string, calc expression, combined expression.
+   *
+   * @param {object} caps  capabilitiesObj from Homey device
+   * @param {string} slot  semantic slot name (e.g. 'power', 'soc', 'status')
+   * @returns {number|string|null}
    */
+  _resolveSlot(caps, slot) {
+    const def = this._map.caps?.[slot];
+    if (!def) return slot.startsWith('power') ? 0 : null;
+
+    // ── plain string ────────────────────────────────────────────────────────
+    if (typeof def === 'string') {
+      return caps?.[def]?.value ?? (slot.startsWith('power') ? 0 : null);
+    }
+
+    // ── calc ────────────────────────────────────────────────────────────────
+    if (def.calc) {
+      return this._applyCalc(caps, def);
+    }
+
+    // ── combined ────────────────────────────────────────────────────────────
+    if (def.combined) {
+      return this._applyCombined(caps, def);
+    }
+
+    return slot.startsWith('power') ? 0 : null;
+  }
+
+  /**
+   * A4 calc: numeric derivation from one or more capabilities.
+   * Supported operations: add, sub, scale, negate
+   */
+  _applyCalc(caps, def) {
+    const read = (capName) => caps?.[capName]?.value ?? 0;
+
+    switch (def.calc) {
+      case 'add':
+        return (def.sources || []).reduce((s, c) => s + read(c), 0);
+
+      case 'sub': {
+        const [a, ...rest] = (def.sources || []);
+        return rest.reduce((v, c) => v - read(c), read(a));
+      }
+
+      case 'scale':
+        return read(def.source) * (def.factor ?? 1);
+
+      case 'negate':
+        return -read(def.source);
+
+      default:
+        this.app.error(`[HomeyDeviceAdapter] Unknown calc operation: ${def.calc}`);
+        return 0;
+    }
+  }
+
+  /**
+   * A4 combined: derive a status string from a numeric value.
+   * Currently supports: threshold
+   */
+  _applyCombined(caps, def) {
+    if (def.combined === 'threshold') {
+      const value = caps?.[def.source]?.value ?? 0;
+      return value > (def.threshold ?? 0) ? def.above : def.below;
+    }
+    this.app.error(`[HomeyDeviceAdapter] Unknown combined type: ${def.combined}`);
+    return null;
+  }
+
+  /**
+   * A4 sequence: write a value to multiple capabilities in order.
+   * Returns true if all writes succeeded, false on first error.
+   *
+   * @param {string} slot   semantic slot name (e.g. 'enable', 'charge')
+   * @param {*}      value  value to write
+   */
+  async writeSlot(slot, value) {
+    const def = this._map.caps?.[slot];
+    if (!def) return false;
+
+    try {
+      const device = await this.app.getDevice(this._map.deviceId);
+
+      // sequence: list of caps to write in order
+      if (def.sequence) {
+        for (const capName of def.sequence) {
+          await device.setCapabilityValue(capName, value);
+        }
+        return true;
+      }
+
+      // plain string: single write
+      if (typeof def === 'string') {
+        await device.setCapabilityValue(def, value);
+        return true;
+      }
+
+    } catch (err) {
+      this.app.error(`[HomeyDeviceAdapter:${this.role}] writeSlot(${slot}) error:`, err.message);
+    }
+    return false;
+  }
+
+  // ─── Private ─────────────────────────────────────────────────────────────
+
   async _getCaps() {
     const now = Date.now();
-    if (this._cache && (now - this._cacheTs) < this._cacheTTL) {
-      return this._cache;
-    }
+    if (this._cache && (now - this._cacheTs) < this._cacheTTL) return this._cache;
     try {
       const device  = await this.app.getDevice(this._map.deviceId);
       this._cache   = device.capabilitiesObj ?? {};
@@ -108,12 +207,6 @@ class HomeyDeviceAdapter extends PowerSource {
       this._cache = {};
     }
     return this._cache;
-  }
-
-  _readCap(caps, slot) {
-    const capName = this._map.caps?.[slot];
-    if (!capName) return 0;
-    return caps?.[capName]?.value ?? 0;
   }
 
 }
