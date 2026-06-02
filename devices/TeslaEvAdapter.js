@@ -79,7 +79,13 @@ class TeslaEvAdapter extends Vehicle {
     this._commandQueue          = null;
     this._chargingStartFired    = false;
     this._chargingStopFired     = false;
-    this._connectedFired        = false; // track plug-in event
+    this._connectedFired        = false;
+
+    // B5: vehicle state cache — SoC and range change slowly (10-30 min).
+    // Caching prevents unnecessary Tesla cloud polls via the Homey Tesla app.
+    this._vehicleStateCache    = null;   // last result of _getTeslaAppState()
+    this._vehicleStateCacheTs  = 0;     // ms timestamp of last fetch
+    this._vehicleStateCacheTTL = 10 * 60_000;  // 10 minutes
   }
 
   // ─── Init ─────────────────────────────────────────────────────────────────
@@ -426,15 +432,20 @@ class TeslaEvAdapter extends Vehicle {
   async _getTeslaAppState() {
     if (!this._teslaDeviceId) return null;
 
+    // B5: serve from cache when fresh — SoC/range change at most every 10-30 min.
+    // Connected/charging state is also cached but invalidated immediately on
+    // transitions so real-time control remains accurate.
+    const now = Date.now();
+    if (this._vehicleStateCache && (now - this._vehicleStateCacheTs) < this._vehicleStateCacheTTL) {
+      return this._vehicleStateCache;
+    }
+
     try {
       const device = await this.app.getDevice(this._teslaDeviceId);
       const caps   = device.capabilitiesObj;
 
-      // charging_state values: 'Charging', 'Complete', 'Disconnected', 'Stopped', 'NoPower', etc.
       const chargingState = caps?.charging_state?.value ?? null;
-
-      // charging_on: boolean — true when charging is active
-      const chargingOn = caps?.charging_on?.value ?? null;
+      const chargingOn    = caps?.charging_on?.value    ?? null;
 
       const charging = chargingOn !== null
         ? chargingOn === true
@@ -442,18 +453,33 @@ class TeslaEvAdapter extends Vehicle {
 
       const connected = chargingState !== null
         ? chargingState !== 'Disconnected'
-        : null; // unknown without state
+        : null;
 
-      // SoC: prefer measure_soc_usable (excludes buffer), fall back to measure_soc_level
       const soc = caps?.measure_soc_usable?.value
         ?? caps?.measure_soc_level?.value
         ?? null;
 
-      return { soc, charging, connected };
+      const result = { soc, charging, connected };
+
+      // Store in cache
+      this._vehicleStateCache   = result;
+      this._vehicleStateCacheTs = now;
+      this.app.log(`[Tesla] App state fetched (cache miss) — SoC: ${soc ?? '?'}%`);
+
+      return result;
     } catch (err) {
       this.app.error('[Tesla] App state error:', err.message);
-      return null;
+      return this._vehicleStateCache ?? null; // return stale cache on error
     }
+  }
+
+  /**
+   * B5: Invalidate the vehicle state cache immediately.
+   * Call when a charging transition is detected so connected/charging
+   * state is re-read on the next tick rather than served stale.
+   */
+  _invalidateVehicleCache() {
+    this._vehicleStateCacheTs = 0;
   }
 
   async _sendCommand(command, args = {}) {
@@ -595,12 +621,14 @@ class TeslaEvAdapter extends Vehicle {
     if (state.charging && !this._chargingStartFired) {
       this._chargingStartFired = true;
       this._chargingStopFired  = false;
-      this._sessionStartKwh    = state.sessionKwh ?? 0;  // snapshot at session start
+      this._sessionStartKwh    = state.sessionKwh ?? 0;
+      this._invalidateVehicleCache(); // B5: re-read SoC on next tick after charging starts
       this.homey.emit('ems:evChargingStarted', { powerW: state.powerW });
     }
     if (!state.charging && !this._chargingStopFired && this._chargingStartFired) {
       this._chargingStopFired  = true;
       this._chargingStartFired = false;
+      this._invalidateVehicleCache(); // B5: re-read SoC on next tick after charging stops
       // Calculate kWh charged this session (delta, not cumulative total)
       const sessionKwh = this._sessionStartKwh != null
         ? Math.max(0, (state.sessionKwh ?? 0) - this._sessionStartKwh)
