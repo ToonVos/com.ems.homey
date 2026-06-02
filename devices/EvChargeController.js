@@ -87,6 +87,17 @@ class EvChargeController extends Charger {
     // Load-balance postpone: timestamp until which EV charging is blocked
     this._evPostponedUntil = 0;
 
+    // B3: time-hysteresis counters
+    this._startConsecutive = 0;
+    this._stopConsecutive  = 0;
+    this._startDelayTicks  = 3;
+    this._stopDelayTicks   = 3;
+
+    // B4: min on/off guard — after switching, lock the new state for N minutes
+    this._lastChargeStartMs = 0;  // ms timestamp of last charging start
+    this._lastChargeStopMs  = 0;  // ms timestamp of last charging stop
+    this._minOnMs           = 5 * 60_000;   // loaded from settings
+    this._minOffMs          = 5 * 60_000;   // loaded from settings
   }
 
   // ─── Init & settings ──────────────────────────────────────────────────────
@@ -133,6 +144,14 @@ class EvChargeController extends Charger {
     // Useful with asymmetric multi-inverter setups where phase imbalance makes
     // true-zero impossible without some phases exporting.
     this._targetImportW  = s.get('ev_target_import_w')   ?? 100;
+
+    // B3: time-hysteresis
+    this._startDelayTicks = s.get('ev_start_delay_ticks') ?? 3;
+    this._stopDelayTicks  = s.get('ev_stop_delay_ticks')  ?? 3;
+
+    // B4: min on/off guard
+    this._minOnMs  = (s.get('ev_min_on_min')  ?? 5) * 60_000;
+    this._minOffMs = (s.get('ev_min_off_min') ?? 5) * 60_000;
 
     // Night charging
     this._nightCharge    = s.get('ev_night_charge')      ?? false;
@@ -262,6 +281,7 @@ class EvChargeController extends Charger {
         this._currentTargetA = 0;
         this.tesla._isChargingByEms = false;
       }
+      this._resetHysteresis('no_vehicle');
       return;
     }
 
@@ -269,6 +289,7 @@ class EvChargeController extends Charger {
 
     if (!evState.connected) {
       this._currentTargetA = 0;
+      this._resetHysteresis('disconnected');
       return;
     }
 
@@ -278,7 +299,8 @@ class EvChargeController extends Charger {
     if (Date.now() < this._evPostponedUntil) {
       const remaining = Math.ceil((this._evPostponedUntil - Date.now()) / 60_000);
       const action = { type: 'stop', reason: `load_balance(${remaining}min)` };
-      await this._applyAction(action, evState, true);  // force: load-balance always wins
+      await this._applyAction(action, evState, true);
+      this._resetHysteresis('postponed');
       this._logTick(evState, action, 'postponed');
       return;
     }
@@ -293,7 +315,8 @@ class EvChargeController extends Charger {
 
     if (inPeak && !tripUrgent) {
       const action = { type: 'stop', reason: 'peak_block' };
-      await this._applyAction(action, evState, true);  // force: stop regardless of who started
+      await this._applyAction(action, evState, true);
+      this._resetHysteresis('peak_block');
       this._logTick(evState, action, `peak(${effectiveMode})`);
       return;
     }
@@ -409,65 +432,99 @@ class EvChargeController extends Charger {
   }
 
   _decideSolarPure(emsState, evState) {
-    // 'pv' / Solar only: charge only when surplus covers the full min current.
-    // Stop immediately when any net grid draw occurs for the EV (surplusW < 0).
-    // Never draws from the grid, not even within a hysteresis band.
+    // Solar only (pv): pure surplus, zero grid draw — stricter stop than Solar+.
     const surplusW  = this._calculateSurplus(emsState, evState);
     const minPowerW = this._toWatts(this._minCurrentA);
-
-    if (evState.charging) {
-      if (surplusW < 0) {
-        return { type: 'stop', reason: 'pv_no_surplus', surplusW };
-      }
-      return { type: 'charge', currentA: this._minCurrentA, reason: 'pv_surplus_ok', surplusW };
-    }
-
-    if (surplusW >= minPowerW) {
-      return {
-        type:     'charge',
-        currentA: this._minCurrentA,
-        reason:   'pv_surplus_start',
-        surplusW,
-        powerW:   minPowerW,
-      };
-    }
-
-    return { type: 'stop', reason: 'pv_insufficient', surplusW };
+    const shouldStart = surplusW >= minPowerW;
+    const shouldStop  = surplusW < 0;               // tighter than Solar+ (-200W)
+    return this._resolveWithHysteresis(shouldStart, shouldStop, evState);
   }
 
   _decideSolarOnly(emsState, evState) {
-    // Strategy B: fixed minimum current, threshold on/off — no dynamic stepping.
-    //
-    // surplusW already accounts for current EV load (see _calculateSurplus), so it
-    // represents "what would be available if we charge at min current".
-    //
-    // Start condition: surplus >= min EV power  → solar clearly covers min charge rate
-    // Stop condition:  surplus < -(minPower×0.25) → grid import > 25% of min power
-    //   (small hysteresis band avoids chattering at the threshold boundary)
+    // Solar+ (strategy B): 5A min, tolerate up to 200W grid draw.
     const surplusW  = this._calculateSurplus(emsState, evState);
     const minPowerW = this._toWatts(this._minCurrentA);
+    const shouldStart = surplusW >= minPowerW;
+    const shouldStop  = surplusW < -200;
+    return this._resolveWithHysteresis(shouldStart, shouldStop, evState);
+  }
+
+  // ─── B3: Time-hysteresis helpers ─────────────────────────────────────────
+
+  /**
+   * Shared hysteresis state-machine for solar modes.
+   *
+   * shouldStart / shouldStop are boolean "wish" signals from the surplus calculation.
+   * The actual switch only happens after N consecutive ticks of the same signal.
+   * This prevents chattering when cloud cover causes rapid surplus fluctuations.
+   *
+   * @param {boolean} shouldStart  true when surplus is sufficient to start charging
+   * @param {boolean} shouldStop   true when surplus is gone and we should stop
+   * @param {object}  evState      current vehicle state
+   * @returns {object}  action object { type, currentA, reason, ... }
+   */
+  _resolveWithHysteresis(shouldStart, shouldStop, evState) {
+    const currentA = this._minCurrentA;
+    const now      = Date.now();
 
     if (evState.charging) {
-      // Stop when surplus is clearly negative (importing from grid to power the EV).
-      // Small hysteresis of 200W prevents chattering on sensor jitter or brief clouds.
-      if (surplusW < -200) {
-        return { type: 'stop', reason: 'surplus_gone', surplusW };
+      // B4: min-on guard — don't stop if we just started
+      const onFor = now - this._lastChargeStartMs;
+      if (this._lastChargeStartMs > 0 && onFor < this._minOnMs) {
+        const waitMin = Math.ceil((this._minOnMs - onFor) / 60_000);
+        return { type: 'charge', currentA, reason: `min_on_guard(${waitMin}min left)` };
       }
-      // Always enforce minCurrentA — never leave a higher current from a previous session
-      return { type: 'charge', currentA: this._minCurrentA, reason: 'surplus_ok', surplusW };
+
+      if (shouldStop) {
+        this._stopConsecutive++;
+        this._startConsecutive = 0;
+        if (this._stopConsecutive >= this._stopDelayTicks) {
+          this._stopConsecutive  = 0;
+          this._lastChargeStopMs = now;
+          return { type: 'stop', reason: `surplus_gone(after ${this._stopDelayTicks} ticks)` };
+        }
+        return { type: 'charge', currentA, reason: `stop_delay(${this._stopConsecutive}/${this._stopDelayTicks})` };
+      }
+      this._stopConsecutive  = 0;
+      this._startConsecutive = 0;
+      return { type: 'charge', currentA, reason: 'surplus_ok' };
     }
 
-    if (surplusW >= minPowerW) {
-      return {
-        type:     'charge',
-        currentA: this._minCurrentA,
-        reason:   'surplus_threshold',
-        surplusW,
-        powerW:   minPowerW,
-      };
+    // Not charging
+    // B4: min-off guard — don't start if we just stopped
+    const offFor = now - this._lastChargeStopMs;
+    if (this._lastChargeStopMs > 0 && offFor < this._minOffMs) {
+      const waitMin = Math.ceil((this._minOffMs - offFor) / 60_000);
+      return { type: 'stop', reason: `min_off_guard(${waitMin}min left)` };
     }
 
-    return { type: 'stop', reason: 'insufficient_surplus', surplusW };
+    if (shouldStart) {
+      this._startConsecutive++;
+      this._stopConsecutive = 0;
+      if (this._startConsecutive >= this._startDelayTicks) {
+        this._startConsecutive = 0;
+        this._lastChargeStartMs = now;
+        return { type: 'charge', currentA, reason: `surplus_start(after ${this._startDelayTicks} ticks)`, powerW: this._toWatts(currentA) };
+      }
+      return { type: 'stop', reason: `start_delay(${this._startConsecutive}/${this._startDelayTicks})` };
+    }
+
+    this._startConsecutive = 0;
+    this._stopConsecutive  = 0;
+    return { type: 'stop', reason: 'insufficient_surplus' };
+  }
+
+  /**
+   * Reset hysteresis counters — call when an external condition interrupts
+   * the solar-following logic (peak block, postpone, vehicle absent/disconnected).
+   * Forces a fresh N-tick accumulation when the condition clears.
+   */
+  _resetHysteresis(reason) {
+    if (this._startConsecutive > 0 || this._stopConsecutive > 0) {
+      this.app.log(`[EvCtrl] Hysteresis reset (${reason})`);
+    }
+    this._startConsecutive = 0;
+    this._stopConsecutive  = 0;
   }
 
   _decideSolarOrGrid(emsState, evState, planSlot, now = new Date()) {

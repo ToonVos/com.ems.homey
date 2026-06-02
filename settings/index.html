@@ -17,6 +17,8 @@
       'ev_peak1_start', 'ev_peak1_end', 'ev_peak2_start', 'ev_peak2_end',
       'ev_night_start', 'ev_night_end', 'ev_bat_night_min_soc',
       'ev_postpone_minutes',
+      'ev_start_delay_ticks', 'ev_stop_delay_ticks',
+      'ev_min_on_min', 'ev_min_off_min',
     ];
 
     var BEHAVIOR_KEYS = [
@@ -31,6 +33,8 @@
       'ev_peak1_start', 'ev_peak1_end', 'ev_peak2_start', 'ev_peak2_end',
       'ev_night_charge', 'ev_night_start', 'ev_night_end', 'ev_bat_night_min_soc',
       'ev_postpone_minutes',
+      'ev_start_delay_ticks', 'ev_stop_delay_ticks',
+      'ev_min_on_min', 'ev_min_off_min',
     ];
 
     var DEVICE_BOOL_KEYS = ['hasBattery', 'hasEv', 'hasEvCharger', 'hasHeatPump', 'ev_night_charge'];
@@ -660,6 +664,32 @@
           <label>Netbuffer bij zon-volgend (W)</label>
           <p class="hint">Kleine netafname die het EMS accepteert voordat de laadstroom omlaag gaat. Standaard 100 W — voorkomt flikker bij asymmetrische omvormers.</p>
           <input type="number" id="ev_target_import_w" value="100" min="-1000" max="1000" step="50" />
+
+          <h3>Tijd-hysterese</h3>
+          <p class="hint">Aantal minuten dat de surplus-voorwaarde onafgebroken gehaald moet worden vóór het EMS schakelt (B3). Voorkomt aan/uit-flapperen bij wisselende bewolking.</p>
+          <div class="row2">
+            <div class="field">
+              <label>Start-vertraging (min)</label>
+              <input type="number" id="ev_start_delay_ticks" value="3" min="1" max="10" step="1" />
+            </div>
+            <div class="field">
+              <label>Stop-vertraging (min)</label>
+              <input type="number" id="ev_stop_delay_ticks" value="3" min="1" max="10" step="1" />
+            </div>
+          </div>
+
+          <h3>Min. aan/uit-tijd</h3>
+          <p class="hint">Na het starten of stoppen vergrendelt het EMS de toestand voor minimaal dit aantal minuten (B4). Beschermt de laadpaal tegen snelle wisselingen.</p>
+          <div class="row2">
+            <div class="field">
+              <label>Min. laadtijd (min)</label>
+              <input type="number" id="ev_min_on_min" value="5" min="1" max="30" step="1" />
+            </div>
+            <div class="field">
+              <label>Min. wachttijd (min)</label>
+              <input type="number" id="ev_min_off_min" value="5" min="1" max="30" step="1" />
+            </div>
+          </div>
 
           <!-- Piekblokken -->
           <h3>Piekuren</h3>

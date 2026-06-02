@@ -22,6 +22,12 @@ class DumpLoadAdapter {
     this._active    = false;
     this._firedOn   = false;
     this._firedOff  = false;
+
+    // B4: min on/off guard — prevents rapid cycling (hardware protection)
+    this._lastActivateTs   = 0;   // ms timestamp of last activate()
+    this._lastDeactivateTs = 0;   // ms timestamp of last deactivate()
+    this._minOnMs          = 5 * 60_000;   // min 5 min ON  before allowing OFF
+    this._minOffMs         = 5 * 60_000;   // min 5 min OFF before allowing ON
   }
 
   init(config) {
@@ -36,8 +42,18 @@ class DumpLoadAdapter {
 
   async activate() {
     if (this._active) return;
-    this._active   = true;
-    this._firedOff = false;
+
+    // B4: min-off guard — don't re-activate too soon after last deactivation
+    const offFor = Date.now() - this._lastDeactivateTs;
+    if (this._lastDeactivateTs > 0 && offFor < this._minOffMs) {
+      const waitMin = Math.ceil((this._minOffMs - offFor) / 60_000);
+      this.app.log(`[DumpLoad] Min-off guard: ${waitMin} min remaining — not activating yet`);
+      return;
+    }
+
+    this._active         = true;
+    this._firedOff       = false;
+    this._lastActivateTs = Date.now();
 
     this.app.log('[DumpLoad] Activating dump loads');
     for (const dev of this._devices) {
@@ -52,8 +68,18 @@ class DumpLoadAdapter {
 
   async deactivate() {
     if (!this._active) return;
-    this._active  = false;
-    this._firedOn = false;
+
+    // B4: min-on guard — don't deactivate too soon after last activation
+    const onFor = Date.now() - this._lastActivateTs;
+    if (this._lastActivateTs > 0 && onFor < this._minOnMs) {
+      const waitMin = Math.ceil((this._minOnMs - onFor) / 60_000);
+      this.app.log(`[DumpLoad] Min-on guard: ${waitMin} min remaining — not deactivating yet`);
+      return;
+    }
+
+    this._active           = false;
+    this._firedOn          = false;
+    this._lastDeactivateTs = Date.now();
 
     this.app.log('[DumpLoad] Deactivating dump loads');
     for (const dev of this._devices) {
