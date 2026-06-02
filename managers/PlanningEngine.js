@@ -256,9 +256,14 @@ class PlanningEngine {
       const targetDayMax = target === 'today'
         ? (forecast.today?.dayMax ?? 15)
         : (forecast.tomorrow?.dayMax ?? 15);
-      const hpMode       = this.app.ems.thermostat
-        ? this.app.ems.thermostat.evaluateMode(nightMin, targetDayMax)
-        : 'heating';
+      // Heating/cooling mode decision: only update when planning for TOMORROW.
+      // Today's plan uses the stored mode (set by yesterday's evening plan).
+      // This prevents the "warmtepomp omgeschakeld" notification from firing
+      // on every plan recalculation during the day.
+      let hpMode = this.app.ems.thermostat?.getMode() ?? 'heating';
+      if (target === 'tomorrow' && this.app.ems.thermostat) {
+        hpMode = this.app.ems.thermostat.evaluateMode(nightMin, targetDayMax);
+      }
 
       // 11. Assemble plan
       // Derived charge/discharge durations

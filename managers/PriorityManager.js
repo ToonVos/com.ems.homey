@@ -97,14 +97,15 @@ class PriorityManager {
       // Here we just ensure it's active when there's surplus and battery needs it
     }
 
-    // ── Prio 2: Thermostat offset ────────────────────────────────────────
+    // ── Prio 2: Thermostat boost (transition-based, not per-tick) ────────
+    // boostTemperature/restoreTemperature are idempotent and have a B4-style
+    // guard — safe to call every tick, they only act on state transitions.
     if (ems.thermostat) {
-      // B1: surplusW is always ≥ 0; use deficitW from state for deficit detection
-    const deficitW    = state.deficitW ?? Math.max(0, state.gridW ?? 0);
-    const energyState = hasSurplus                          ? 'surplus'
-        : deficitW > this._surplusThreshold                ? 'deficit'
-        : 'normal';
-      await ems.thermostat.applyOffset(energyState);
+      if (hasSurplus) {
+        await ems.thermostat.boostTemperature();
+      } else {
+        await ems.thermostat.restoreTemperature();
+      }
     }
 
     // ── Prio 3: Dump load ────────────────────────────────────────────────

@@ -27,24 +27,32 @@ class ThermostatAdapter extends Thermostat {
     this.app        = app;
     this.homey      = app.homey;
     this.thermostats = [];
-    this._mode       = 'heating'; // 'heating' | 'cooling' — same for all units (outdoor temp based)
-    this._userOffMap = {};        // id → true if user manually turned off
-    this._lastSetBy  = {};        // id → 'ems' | 'user'
-    this._activeOffset = 0;       // current applied offset (+ or -)
-    this._lastOverrideCheck = 0;  // timestamp of last _checkUserOverrides call
+    this._userOffMap = {};
+    this._lastSetBy  = {};
+    this._activeOffset = 0;
+    this._lastOverrideCheck = 0;
     this._overrideCheckIntervalMs = 10 * 60 * 1000; // max 1× per 10 min — Daikin rate limit
+
+    // Mode — loaded from settings so it survives restarts
+    this._mode = this.homey.settings.get('thermostat_mode') ?? 'heating';
+
+    // Boost state — anti-chatter: only act on surplus transitions (not every tick)
+    this._boostActive      = false;
+    this._lastBoostChangeMs = 0;
+    this._minBoostChangeMs  = 5 * 60_000; // B4-style guard: min 5 min between changes
   }
 
   init(config) {
     this.thermostats    = config.thermostats  || [];
-    this._heatingNightThreshold = config.heatingNightThreshold ?? 10; // °C
-    this._heatingDayThreshold   = config.heatingDayThreshold   ?? 17; // °C
-    this._offsetStep    = config.offsetStep   ?? 0.5;  // °C per surplus level
-    this._maxOffset     = config.maxOffset    ?? 2.0;  // °C max total offset
+    this._heatingNightThreshold = config.heatingNightThreshold ?? 10;
+    this._heatingDayThreshold   = config.heatingDayThreshold   ?? 17;
+    this._offsetStep    = config.offsetStep   ?? 0.5;
+    this._maxOffset     = config.maxOffset    ?? 2.0;
 
-    this.app.log(`[Thermostat] ${this.thermostats.length} thermostat(s) configured`);
+    // Load persisted mode (may have been updated by last night's plan)
+    this._mode = this.homey.settings.get('thermostat_mode') ?? this._mode;
+    this.app.log(`[Thermostat] ${this.thermostats.length} thermostat(s) | mode: ${this._mode}`);
 
-    // Listen for capability changes to detect user overrides
     this._watchUserChanges();
   }
 
@@ -63,8 +71,10 @@ class ThermostatAdapter extends Thermostat {
     const newMode = shouldCool ? 'cooling' : 'heating';
 
     if (newMode !== this._mode) {
-      this.app.log(`[Thermostat] Mode switch: ${this._mode} → ${newMode} (night: ${forecastNightMin}°C, day: ${forecastDayMax}°C)`);
+      this.app.log(`[Thermostat] Mode: ${this._mode} → ${newMode} (night: ${forecastNightMin}°C, day: ${forecastDayMax}°C)`);
       this._mode = newMode;
+      // Persist so the mode survives restarts and is available without a plan recalc
+      this.homey.settings.set('thermostat_mode', newMode);
       this.homey.emit('ems:heatpumpModeChanged', newMode);
     }
 
@@ -72,6 +82,72 @@ class ThermostatAdapter extends Thermostat {
   }
 
   getMode() { return this._mode; }
+
+  // ─── Surplus boost (ad-hoc, real-time) ───────────────────────────────────
+
+  /**
+   * Apply temperature offset when solar surplus is available.
+   * Called by PriorityManager on surplus → non-surplus TRANSITION only.
+   * Idempotent: does nothing if boost is already active.
+   * B4-style guard prevents rapid on/off cycling.
+   */
+  async boostTemperature() {
+    if (this._boostActive) return;
+
+    const now = Date.now();
+    if (this._lastBoostChangeMs > 0 && (now - this._lastBoostChangeMs) < this._minBoostChangeMs) {
+      const waitMin = Math.ceil((this._minBoostChangeMs - (now - this._lastBoostChangeMs)) / 60_000);
+      this.app.log(`[Thermostat] Boost guard: ${waitMin} min remaining`);
+      return;
+    }
+
+    if (this.thermostats.length === 0) return;
+    await this._checkUserOverridesIfDue();
+
+    this._boostActive       = true;
+    this._lastBoostChangeMs = now;
+    this.app.log(`[Thermostat] Boost ON (${this._mode}) — applying +${this._offsetStep}°C offset`);
+
+    for (const t of this.thermostats) {
+      await this._applyToThermostat(t, this._offsetStep);
+    }
+    this._activeOffset = this._offsetStep;
+  }
+
+  /**
+   * Remove temperature offset when surplus is gone.
+   * Called by PriorityManager on surplus → non-surplus TRANSITION only.
+   * Idempotent: does nothing if boost is already inactive.
+   */
+  async restoreTemperature() {
+    if (!this._boostActive) return;
+
+    const now = Date.now();
+    if (this._lastBoostChangeMs > 0 && (now - this._lastBoostChangeMs) < this._minBoostChangeMs) {
+      const waitMin = Math.ceil((this._minBoostChangeMs - (now - this._lastBoostChangeMs)) / 60_000);
+      this.app.log(`[Thermostat] Restore guard: ${waitMin} min remaining`);
+      return;
+    }
+
+    if (this.thermostats.length === 0) return;
+    await this._checkUserOverridesIfDue();
+
+    this._boostActive       = false;
+    this._lastBoostChangeMs = now;
+    this._activeOffset      = 0;
+    this.app.log(`[Thermostat] Boost OFF — restoring base temperatures`);
+
+    await this.restoreAll();
+  }
+
+  /** Rate-limited override check — called before acting on thermostats */
+  async _checkUserOverridesIfDue() {
+    const now = Date.now();
+    if ((now - this._lastOverrideCheck) >= this._overrideCheckIntervalMs) {
+      this._lastOverrideCheck = now;
+      await this._checkUserOverrides();
+    }
+  }
 
   // ─── Offset control (called by EmsManager each tick) ──────────────────────
 
@@ -89,16 +165,15 @@ class ThermostatAdapter extends Thermostat {
    *       gridW >  threshold  → deficit on that phase  → lower setpoint
    *       otherwise           → normal
    */
+  /**
+   * Legacy per-tick offset (kept for phase-aware per-thermostat logic).
+   * Called by EmsManager for per-phase thermostat control.
+   * The surplus boost is now handled by boostTemperature/restoreTemperature.
+   */
   async applyOffset(energyState, gridPhases = null) {
     if (this.thermostats.length === 0) return;
 
-    // Rate-limit: check user overrides at most once per 10 minutes
-    // Daikin cloud API has strict rate limits — polling every 60s causes "Too Many Requests"
-    const now = Date.now();
-    if (now - this._lastOverrideCheck >= this._overrideCheckIntervalMs) {
-      this._lastOverrideCheck = now;
-      await this._checkUserOverrides();
-    }
+    await this._checkUserOverridesIfDue();
 
     const THRESHOLD = this.homey.settings.get('surplus_threshold') ?? 300;
 
