@@ -267,6 +267,7 @@ class EmsManager {
       surplusW,
       deficitW,
       evW,
+      evSoc:          evState?.soc ?? null,   // fix: expose EV SoC for PriorityManager
       timestamp:      Date.now(),
     };
   }

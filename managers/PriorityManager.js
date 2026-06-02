@@ -99,8 +99,10 @@ class PriorityManager {
 
     // ── Prio 2: Thermostat offset ────────────────────────────────────────
     if (ems.thermostat) {
-      const energyState = hasSurplus ? 'surplus'
-        : surplusW < -this._surplusThreshold ? 'deficit'
+      // B1: surplusW is always ≥ 0; use deficitW from state for deficit detection
+    const deficitW    = state.deficitW ?? Math.max(0, state.gridW ?? 0);
+    const energyState = hasSurplus                          ? 'surplus'
+        : deficitW > this._surplusThreshold                ? 'deficit'
         : 'normal';
       await ems.thermostat.applyOffset(energyState);
     }
