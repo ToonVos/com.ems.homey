@@ -396,10 +396,43 @@ class EvChargeController extends Charger {
       case 'solar_and_grid':
         return this._decideSolarOrGrid(emsState, evState, planSlot, now);
 
+      case 'pv':
+        // Solar only (pure) — zero grid draw for EV.
+        // Stops the moment surplusW drops below zero; no hysteresis buffer.
+        return this._decideSolarPure(emsState, evState);
+
       case 'solar_only':
       default:
+        // Solar+ — strategy B: 5A minimum, tolerates up to 200W grid draw.
         return this._decideSolarOnly(emsState, evState);
     }
+  }
+
+  _decideSolarPure(emsState, evState) {
+    // 'pv' / Solar only: charge only when surplus covers the full min current.
+    // Stop immediately when any net grid draw occurs for the EV (surplusW < 0).
+    // Never draws from the grid, not even within a hysteresis band.
+    const surplusW  = this._calculateSurplus(emsState, evState);
+    const minPowerW = this._toWatts(this._minCurrentA);
+
+    if (evState.charging) {
+      if (surplusW < 0) {
+        return { type: 'stop', reason: 'pv_no_surplus', surplusW };
+      }
+      return { type: 'charge', currentA: this._minCurrentA, reason: 'pv_surplus_ok', surplusW };
+    }
+
+    if (surplusW >= minPowerW) {
+      return {
+        type:     'charge',
+        currentA: this._minCurrentA,
+        reason:   'pv_surplus_start',
+        surplusW,
+        powerW:   minPowerW,
+      };
+    }
+
+    return { type: 'stop', reason: 'pv_insufficient', surplusW };
   }
 
   _decideSolarOnly(emsState, evState) {

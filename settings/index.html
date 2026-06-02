@@ -630,8 +630,9 @@
           <h3>Laadstrategie</h3>
           <label>Laadmodus</label>
           <select id="ev_charge_mode">
-            <option value="solar_only">☀️ Alleen zon — laadt op zonne-overschot (5A drempel)</option>
-            <option value="solar_and_grid">☀️🔌 Zon + net — zolvolgend, bijladen bij geplande rit</option>
+            <option value="pv">☀️ Solar only — puur zonne-overschot, nooit netladen</option>
+            <option value="solar_only">☀️+ Solar+ — zonne-overschot met 5A minimum (200W buffer)</option>
+            <option value="solar_and_grid">☀️🔌 Zon + net — Solar+ met nachtladen bij geplande rit</option>
             <option value="fixed">📌 Vast vermogen — altijd laden met vaste stroom</option>
             <option value="fast_charge">⚡ Snel laden — maximale stroom</option>
             <option value="off">🚫 Uit — EMS beheert de auto niet</option>
