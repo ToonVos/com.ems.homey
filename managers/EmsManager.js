@@ -1,6 +1,7 @@
 'use strict';
 
 const DeviceProfiler        = require('../devices/DeviceProfiler');
+const HomeyDeviceAdapter    = require('../devices/HomeyDeviceAdapter');   // A2 shadow
 const HomeWizardAdapter     = require('../devices/HomeWizardAdapter');
 const BatteryAdapter        = require('../devices/BatteryAdapter');
 const ThermostatAdapter     = require('../devices/ThermostatAdapter');
@@ -104,6 +105,28 @@ class EmsManager {
       config,
     });
 
+    // ── A2 shadow: HomeyDeviceAdapter running alongside existing adapters ─────
+    // Reads the same data, logs differences — does NOT steer anything.
+    // Remove or promote to primary after shadow validation confirms parity.
+    this._shadowGrid = null;
+    this._shadowPv   = null;
+    try {
+      if (config.gridMeterId) {
+        const gridMap = await this.deviceProfiler.toCapabilityMap(config.gridMeterId, 'grid_meter');
+        if (gridMap) this._shadowGrid = new HomeyDeviceAdapter(this.app, gridMap);
+      }
+      const firstPvId = (config.pvMeterIds || [])[0];
+      if (firstPvId) {
+        const pvMap = await this.deviceProfiler.toCapabilityMap(firstPvId, 'pv');
+        if (pvMap) this._shadowPv = new HomeyDeviceAdapter(this.app, pvMap);
+      }
+      if (this._shadowGrid || this._shadowPv) {
+        this.app.log('[A2 Shadow] HomeyDeviceAdapters initialised — running in read-only shadow mode');
+      }
+    } catch (err) {
+      this.app.error('[A2 Shadow] Init error (non-fatal):', err.message);
+    }
+
     // Start control loop
     this._loop = this.homey.setInterval(() => this._tick(), LOOP_INTERVAL_MS);
     this.app.log('[EMS] Control loop started');
@@ -200,6 +223,9 @@ class EmsManager {
 
     // Measured EV charge power (from charger device or Wall Connector)
     const evW = Math.round(evState?.powerW ?? 0);
+
+    // ── A2 shadow comparison (read-only, does not steer) ─────────────────────
+    this._runShadowComparison(pvW, gridW).catch(() => {});
 
     return {
       pvW,
@@ -363,6 +389,39 @@ class EmsManager {
       batW:  avg(cur.batW,   state.batPowerW),
       evW:   avg(cur.evW,    state.evW),
     });
+  }
+
+  // ─── A2 Shadow validation ─────────────────────────────────────────────────
+
+  /**
+   * Compare HomeyDeviceAdapter readings against existing adapter readings.
+   * Purely informational — logged every tick, does not influence steering.
+   * Remove once shadow validation confirms parity and we promote A2 to primary.
+   */
+  async _runShadowComparison(existingPvW, existingGridW) {
+    const TOLERANCE_W = 10; // differences below this are considered noise
+
+    if (this._shadowPv) {
+      try {
+        const shadowPvW = await this._shadowPv.getPowerW();
+        const diff      = Math.abs(shadowPvW - existingPvW);
+        const ok        = diff <= TOLERANCE_W ? '✓' : '⚠';
+        this.app.log(`[A2 Shadow] PV: shadow=${shadowPvW}W  existing=${existingPvW}W  diff=${diff}W ${ok}`);
+      } catch (e) {
+        this.app.error('[A2 Shadow] PV read error:', e.message);
+      }
+    }
+
+    if (this._shadowGrid) {
+      try {
+        const shadowGridW = await this._shadowGrid.getPowerW();
+        const diff        = Math.abs(shadowGridW - existingGridW);
+        const ok          = diff <= TOLERANCE_W ? '✓' : '⚠';
+        this.app.log(`[A2 Shadow] Grid: shadow=${shadowGridW}W  existing=${existingGridW}W  diff=${diff}W ${ok}`);
+      } catch (e) {
+        this.app.error('[A2 Shadow] Grid read error:', e.message);
+      }
+    }
   }
 
   // ─── Night / Day load tracking ───────────────────────────────────────────

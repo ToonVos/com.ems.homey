@@ -143,6 +143,68 @@ class DeviceProfiler {
     return false;
   }
 
+  /**
+   * Convert a device + role into a CapabilityMap ready for HomeyDeviceAdapter.
+   *
+   * The method inspects the live device capabilities and maps each semantic
+   * slot to the best matching Homey capability name.  This is the bridge
+   * between DeviceProfiler.probe() (inspection) and HomeyDeviceAdapter
+   * (operation).
+   *
+   * Supported roles in A2: 'grid_meter', 'pv'
+   * Battery/EV/thermostat maps will be added in A3–A4.
+   *
+   * @param {string} deviceId
+   * @param {'grid_meter'|'pv'} role
+   * @returns {Promise<object>}  CapabilityMap  { role, deviceId, caps }
+   */
+  async toCapabilityMap(deviceId, role) {
+    if (!deviceId) return null;
+
+    let caps = [];
+    try {
+      const device = await this.app.getDevice(deviceId);
+      caps = device.capabilities || [];
+    } catch (err) {
+      this.app.error(`[Profiler] toCapabilityMap: getDevice failed for ${deviceId}:`, err.message);
+      return null;
+    }
+
+    const has = (c) => caps.includes(c);
+    const pick = (...candidates) => candidates.find(c => has(c)) ?? null;
+
+    switch (role) {
+
+      case 'grid_meter':
+        return {
+          role,
+          deviceId,
+          caps: {
+            power:    pick('measure_power') ?? null,
+            power_l1: pick('measure_power.phase_1', 'measure_power.l1') ?? null,
+            power_l2: pick('measure_power.phase_2', 'measure_power.l2') ?? null,
+            power_l3: pick('measure_power.phase_3', 'measure_power.l3') ?? null,
+          },
+        };
+
+      case 'pv':
+        return {
+          role,
+          deviceId,
+          caps: {
+            power:    pick('measure_power') ?? null,
+            power_l1: pick('measure_power.pv_l1', 'measure_power.phase_1') ?? null,
+            power_l2: pick('measure_power.pv_l2', 'measure_power.phase_2') ?? null,
+            power_l3: pick('measure_power.pv_l3', 'measure_power.phase_3') ?? null,
+          },
+        };
+
+      default:
+        this.app.log(`[Profiler] toCapabilityMap: role '${role}' not yet implemented`);
+        return null;
+    }
+  }
+
   _flowFallbackReason(caps, knownType) {
     if (knownType === 'growatt_inverter') {
       return 'Growatt inverter is read-only in offline mode. Use HomeWizard kWh meter for production measurement.';
