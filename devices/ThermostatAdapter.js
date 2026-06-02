@@ -1,5 +1,7 @@
 'use strict';
 
+const Thermostat = require('../interfaces/Thermostat');
+
 /**
  * ThermostatAdapter
  * ─────────────────
@@ -18,9 +20,10 @@
  * Config per thermostat:
  *  { id, name, room, baseTemp, offsetStep, maxOffset, capabilities: [...] }
  */
-class ThermostatAdapter {
+class ThermostatAdapter extends Thermostat {
 
   constructor(app) {
+    super();
     this.app        = app;
     this.homey      = app.homey;
     this.thermostats = [];

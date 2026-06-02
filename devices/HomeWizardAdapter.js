@@ -1,5 +1,7 @@
 'use strict';
 
+const PowerSource = require('../interfaces/PowerSource');
+
 /**
  * HomeWizard adapter
  * ──────────────────
@@ -25,9 +27,10 @@
  *   We access this via the Homey Insights API which logs all capability
  *   values over time — no direct HomeWizard API call needed.
  */
-class HomeWizardAdapter {
+class HomeWizardAdapter extends PowerSource {
 
   constructor(app) {
+    super();
     this.app    = app;
     this.homey  = app.homey;
     this._p1Id  = null;   // device ID of P1 meter

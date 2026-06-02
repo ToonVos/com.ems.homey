@@ -1,5 +1,7 @@
 'use strict';
 
+const Vehicle = require('../interfaces/Vehicle');
+
 /**
  * TeslaEvAdapter
  * ──────────────
@@ -49,9 +51,10 @@ const MIN_COMMAND_INTERVAL_MS      = 3 * 60 * 1000;  // 3 min — start/stop (wa
 const MIN_CURRENT_ADJUST_INTERVAL  = 2 * 60 * 1000;  // 2 min — set_charge_amps (car already awake)
 const WC_POLL_URL             = (ip) => `http://${ip}/api/1/vitals`;
 
-class TeslaEvAdapter {
+class TeslaEvAdapter extends Vehicle {
 
   constructor(app) {
+    super();
     this.app   = app;
     this.homey = app.homey;
 

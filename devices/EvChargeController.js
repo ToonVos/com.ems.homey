@@ -1,5 +1,7 @@
 'use strict';
 
+const Charger = require('../interfaces/Charger');
+
 /**
  * EvChargeController
  * ──────────────────
@@ -51,9 +53,10 @@ const HYSTERESIS_A        = 1;     // min current change before actually adjusti
 const STOP_HYSTERESIS_A   = 2;     // when already charging, stop only when rawA drops this far below IEC min
 const TRIP_FALLBACK_HOURS = 2;     // hours before departure to force fast_charge
 
-class EvChargeController {
+class EvChargeController extends Charger {
 
   constructor(app, teslaAdapter, tripPlanner) {
+    super();
     this.app         = app;
     this.homey       = app.homey;
     this.tesla       = teslaAdapter;

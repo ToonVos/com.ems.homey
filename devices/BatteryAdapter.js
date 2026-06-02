@@ -1,5 +1,7 @@
 'use strict';
 
+const ControllableBattery = require('../interfaces/ControllableBattery');
+
 /**
  * BatteryAdapter
  * ──────────────
@@ -19,9 +21,10 @@
  * Each battery entry in config:
  *   { id, capacityKwh, maxChargeW, maxDischargeW }
  */
-class BatteryAdapter {
+class BatteryAdapter extends ControllableBattery {
 
   constructor(app) {
+    super();
     this.app      = app;
     this.homey    = app.homey;
     this.batteries = [];
