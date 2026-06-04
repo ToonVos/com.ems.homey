@@ -234,25 +234,37 @@ class EvChargeController extends Charger {
   // ─── Time helpers ─────────────────────────────────────────────────────────
 
   /**
-   * Returns true if the current hour falls inside a peak block.
+   * Returns a Date-like object with getHours()/getDay() returning LOCAL time.
+   * Homey runs Node.js in UTC — new Date().getHours() gives UTC, not local.
+   * Using homey.clock.getTimezone() ensures peak blocks and night windows
+   * are evaluated in the user's timezone (e.g. Europe/Amsterdam).
+   */
+  _localNow() {
+    const tz    = this.homey.clock?.getTimezone?.() ?? 'Europe/Amsterdam';
+    const local = new Date(new Date().toLocaleString('en-US', { timeZone: tz }));
+    return local;
+  }
+
+  /**
+   * Returns true if the current LOCAL hour falls inside a peak block.
    * Supports overnight wrap (start > end means it crosses midnight).
    */
-  isPeakHour(now = new Date()) {
+  isPeakHour(now = this._localNow()) {
     const h = now.getHours();
     return this._inHourBlock(h, this._peak1Start, this._peak1End)
         || this._inHourBlock(h, this._peak2Start, this._peak2End);
   }
 
-  _isNightWindow(now = new Date()) {
+  _isNightWindow(now = this._localNow()) {
     const h = now.getHours();
     return this._inHourBlock(h, this._nightStart, this._nightEnd);
   }
 
   /**
-   * Returns true if tomorrow is a configured "car at home" day.
+   * Returns true if tomorrow (LOCAL time) is a configured "car at home" day.
    * When true, night charging is skipped — the car can charge on solar tomorrow.
    */
-  _isTomorrowHomeDay(now = new Date()) {
+  _isTomorrowHomeDay(now = this._localNow()) {
     const tomorrow = new Date(now);
     tomorrow.setDate(tomorrow.getDate() + 1);
     return this._homeDays.includes(tomorrow.getDay());
