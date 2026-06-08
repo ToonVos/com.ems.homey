@@ -657,15 +657,23 @@
           </div>
           <div class="row2">
             <div class="field">
-              <label>Standaard klaar-tijd</label>
-              <input type="time" id="ev_default_deadline" value="07:00" />
-              <p class="hint">Doel bereikt vóór dit tijdstip (zonder override).</p>
-            </div>
-            <div class="field">
               <label>Standaard doel-SoC (%)</label>
               <input type="number" id="ev_default_soc" value="70" min="20" max="100" />
               <p class="hint">Geldt zonder dashboard-override.</p>
             </div>
+            <div class="field">
+              <label>Opportunistisch plafond (%)</label>
+              <input type="number" id="ev_opportunistic_soc" value="85" min="50" max="100" />
+              <p class="hint">Tot dit niveau in de allergoedkoopste week-uren.</p>
+            </div>
+          </div>
+          <div class="row2">
+            <div class="field">
+              <label>Standaard klaar-tijd</label>
+              <input type="time" id="ev_default_deadline" value="07:00" />
+              <p class="hint">Standaard-doel bereikt vóór dit tijdstip (zonder override).</p>
+            </div>
+            <div class="field"></div>
           </div>
 
           <!-- Laadstrategie -->
@@ -689,20 +697,11 @@
               <b>"EMS Tesla-doel"</b>; zonder override geldt de <b>standaard doel-SoC</b> hierboven op de
               eerstvolgende 07:00. Harde ondergrens 20% (panic). Zon-instellingen zijn dan niet van toepassing.
             </p>
-            <div class="row2">
-              <div class="field">
-                <label>Opportunistisch plafond (%)</label>
-                <input type="number" id="ev_opportunistic_soc" value="85" min="50" max="100" />
-                <p class="hint">Zonder override: tot dit niveau in de allergoedkoopste week-uren.</p>
-              </div>
-              <div class="field">
-                <label>Sturing</label>
-                <select id="tesla_scheduler_mode">
-                  <option value="live">🟢 Live — stuurt de auto echt aan</option>
-                  <option value="dryrun">🧪 Proef — rekent en logt, stuurt niets</option>
-                </select>
-              </div>
-            </div>
+            <label>Sturing</label>
+            <select id="tesla_scheduler_mode">
+              <option value="live">🟢 Live — stuurt de auto echt aan</option>
+              <option value="dryrun">🧪 Proef — rekent en logt, stuurt niets</option>
+            </select>
           </div>
 
           <div class="row2">
