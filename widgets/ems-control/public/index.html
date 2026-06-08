@@ -1,0 +1,186 @@
+<html>
+<head>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: var(--homey-font-family, -apple-system, sans-serif);
+      background: transparent;
+      color: var(--homey-text-color, #202124);
+      display: flex; flex-direction: column;
+      padding: 10px 12px;
+    }
+
+    .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+    .title  { font-size: 10px; font-weight: 700; opacity: .45; letter-spacing: .8px; text-transform: uppercase; }
+    .mode   { font-size: 9px; padding: 2px 8px; border-radius: 6px; font-weight: 700; white-space: nowrap; }
+    .mode-auto   { background: rgba(128,128,128,.12); color: rgba(128,128,128,.7); }
+    .mode-manual { background: rgba(249,115,22,.13); color: #f97316; }
+
+    .soc { display: flex; align-items: baseline; gap: 5px; margin-bottom: 10px; }
+    .soc-val  { font-size: 26px; font-weight: 800; letter-spacing: -1px; }
+    .soc-unit { font-size: 10px; opacity: .45; }
+    .soc-arrow{ font-size: 12px; opacity: .4; }
+    .soc-target { font-size: 15px; font-weight: 700; color: #f97316; }
+
+    .label { font-size: 9px; font-weight: 700; opacity: .4; text-transform: uppercase; letter-spacing: .6px; margin: 6px 0 4px; }
+
+    .chips { display: flex; gap: 5px; }
+    .chip {
+      flex: 1; text-align: center; padding: 7px 0; border-radius: 8px; cursor: pointer;
+      font-size: 13px; font-weight: 700; border: 1.5px solid rgba(128,128,128,.2);
+      background: transparent; color: var(--homey-text-color, #202124); transition: all .12s;
+    }
+    .chip.sel { border-color: #f97316; background: rgba(249,115,22,.14); color: #f97316; }
+    .chip.auto.sel { border-color: #22c55e; background: rgba(34,197,94,.14); color: #22c55e; }
+
+    input[type=datetime-local] {
+      width: 100%; padding: 7px 9px; border-radius: 8px; font-size: 12px;
+      border: 1.5px solid rgba(128,128,128,.2); background: transparent;
+      color: var(--homey-text-color, #202124); font-family: inherit;
+    }
+
+    .actions { display: flex; gap: 6px; margin-top: 10px; }
+    .btn {
+      flex: 1; padding: 9px 0; border-radius: 8px; font-size: 12px; font-weight: 700;
+      cursor: pointer; border: none; font-family: inherit;
+    }
+    .btn-save { background: #f97316; color: #fff; }
+    .btn-auto { background: rgba(128,128,128,.14); color: var(--homey-text-color, #202124); }
+    .btn:disabled { opacity: .4; cursor: default; }
+
+    .status { margin-top: 8px; font-size: 10px; opacity: .55; min-height: 13px; text-align: center; }
+    .status.err { color: #ef4444; opacity: .9; }
+    .status.ok  { color: #22c55e; opacity: .9; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="title">🚗 Tesla laaddoel</div>
+    <span id="mode" class="mode mode-auto">AUTO</span>
+  </div>
+
+  <div class="soc">
+    <span class="soc-val"  id="soc">–</span><span class="soc-unit">% nu</span>
+    <span class="soc-arrow">→</span>
+    <span class="soc-target" id="tgt">–%</span>
+  </div>
+
+  <div class="label">Doel</div>
+  <div class="chips" id="chips">
+    <div class="chip auto" data-pct="60">Auto&nbsp;60</div>
+    <div class="chip" data-pct="80">80</div>
+    <div class="chip" data-pct="90">90</div>
+    <div class="chip" data-pct="95">95</div>
+    <div class="chip" data-pct="100">100</div>
+  </div>
+
+  <div class="label">Klaar op</div>
+  <input type="datetime-local" id="deadline" />
+
+  <div class="actions">
+    <button class="btn btn-save" id="save">Opslaan</button>
+    <button class="btn btn-auto" id="auto">Auto (60% / 07:00)</button>
+  </div>
+
+  <div class="status" id="status"></div>
+
+  <script>
+    let state = null;
+    let selPct = 60;
+    let Homey;
+
+    const $ = (id) => document.getElementById(id);
+
+    // ISO (UTC) → "YYYY-MM-DDTHH:MM" in de Homey-tijdzone (voor datetime-local).
+    function isoToLocalInput(iso, tz) {
+      const d = new Date(iso);
+      const p = new Intl.DateTimeFormat('en-CA', {
+        timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+      }).formatToParts(d).reduce((o, x) => (o[x.type] = x.value, o), {});
+      return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
+    }
+
+    // Hoeveel de wandklok van tz vóórloopt op UTC, op moment `date` (ms).
+    function tzOffsetMs(date, tz) {
+      const p = new Intl.DateTimeFormat('en-US', {
+        timeZone: tz, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      }).formatToParts(date).reduce((a, x) => (a[x.type] = x.value, a), {});
+      const h = p.hour === '24' ? 0 : Number(p.hour);
+      const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, h, +p.minute, +p.second);
+      return asUTC - date.getTime();
+    }
+
+    // "YYYY-MM-DDTHH:MM" (wandklok in tz) → ISO (UTC).
+    function localInputToIso(val, tz) {
+      const [d, t] = val.split('T');
+      const [y, mo, day] = d.split('-').map(Number);
+      const [h, mi] = t.split(':').map(Number);
+      const utcGuess = Date.UTC(y, mo - 1, day, h, mi, 0);
+      let off = tzOffsetMs(new Date(utcGuess), tz);
+      let res = new Date(utcGuess - off);
+      off = tzOffsetMs(res, tz);
+      return new Date(utcGuess - off).toISOString();
+    }
+
+    function renderChips() {
+      document.querySelectorAll('.chip').forEach(c => {
+        c.classList.toggle('sel', Number(c.dataset.pct) === selPct);
+      });
+      $('tgt').textContent = selPct + '%';
+    }
+
+    function applyState(s) {
+      state = s;
+      selPct = s.target_pct;
+      $('soc').textContent  = s.tesla_soc == null ? '–' : s.tesla_soc;
+      $('mode').textContent = s.active ? 'HANDMATIG' : 'AUTO';
+      $('mode').className   = 'mode ' + (s.active ? 'mode-manual' : 'mode-auto');
+      $('deadline').value   = isoToLocalInput(s.deadline_iso, s.tz);
+      renderChips();
+    }
+
+    function setStatus(msg, kind) {
+      const el = $('status');
+      el.textContent = msg || '';
+      el.className = 'status' + (kind ? ' ' + kind : '');
+    }
+
+    async function load() {
+      try { applyState(await Homey.api('GET', '/getOverride', {})); }
+      catch (e) { setStatus('Laden mislukt', 'err'); }
+    }
+
+    async function save() {
+      setStatus('Opslaan…');
+      try {
+        const iso = localInputToIso($('deadline').value, state.tz);
+        const s = await Homey.api('POST', '/setOverride', { target_pct: selPct, deadline_iso: iso });
+        applyState(s);
+        setStatus('Opgeslagen ✓', 'ok');
+      } catch (e) {
+        setStatus(e.message || 'Opslaan mislukt', 'err');
+      }
+    }
+
+    async function auto() {
+      setStatus('Terug naar auto…');
+      try { applyState(await Homey.api('POST', '/clearOverride', {})); setStatus('Auto-modus ✓', 'ok'); }
+      catch (e) { setStatus(e.message || 'Mislukt', 'err'); }
+    }
+
+    function onHomeyReady(_Homey) {
+      Homey = _Homey;
+      document.querySelectorAll('.chip').forEach(c =>
+        c.addEventListener('click', () => { selPct = Number(c.dataset.pct); renderChips(); }));
+      $('save').addEventListener('click', save);
+      $('auto').addEventListener('click', auto);
+      Homey.ready({ height: 360 });
+      load();
+      setInterval(load, 60_000);
+    }
+  </script>
+</body>
+</html>

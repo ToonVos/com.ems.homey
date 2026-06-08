@@ -44,6 +44,121 @@ class EmsApp extends Homey.App {
     return this._homeyApi.devices.getDevice({ id });
   }
 
+  // ─── Tesla laaddoel-override (dashboard-widget ems-control) ────────────────
+  // Pre-saldering geldt: enige knop = wanneer kopen. Default = 60% gegarandeerd
+  // op eerstvolgende 07:00; gebruiker kan dit overschrijven met een hoger %
+  // {80,90,95,100} tegen een gekozen datum/tijd (max 168u vooruit). 20% = harde
+  // vloer (panic), geen keuze. Opslag in settings; PlanningEngine leest dit.
+
+  static AUTO_TARGET_PCT   = 60;
+  static FLOOR_PCT         = 20;
+  static MAX_HORIZON_HOURS = 168;
+
+  // Tijdzone-rekenkunde — runtime-TZ-onafhankelijk via Intl.formatToParts
+  // (geen Date-string-parsing zonder offset; voorkomt de 2u-fout bij zomertijd).
+
+  /** Hoeveel de wandklok van `tz` vóórloopt op UTC, op het moment `date` (ms). */
+  _tzOffsetMs(date, tz) {
+    const p = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    }).formatToParts(date).reduce((a, x) => (a[x.type] = x.value, a), {});
+    const h = p.hour === '24' ? 0 : Number(p.hour);
+    const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, h, +p.minute, +p.second);
+    return asUTC - date.getTime();
+  }
+
+  /** Wandklok-tijd (y, mo[1-12], d, h, min) in `tz` → exacte UTC-Date. */
+  _zonedWallToUtc(y, mo, d, h, min, tz) {
+    const utcGuess = Date.UTC(y, mo - 1, d, h, min, 0);
+    let off = this._tzOffsetMs(new Date(utcGuess), tz);
+    let res = new Date(utcGuess - off);
+    off = this._tzOffsetMs(res, tz);          // DST-randverfijning
+    return new Date(utcGuess - off);
+  }
+
+  /** Lokale datumdelen (en-CA, h23) van `date` in `tz`. */
+  _tzParts(date, tz) {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(date).reduce((a, x) => (a[x.type] = x.value, a), {});
+  }
+
+  /** Eerstvolgende 07:00 (lokaal) in de toekomst, als UTC-Date. */
+  _nextSevenAm() {
+    const tz = this.homey.clock.getTimezone();
+    const P  = this._tzParts(new Date(), tz);
+    const day = +P.day + (Number(P.hour) >= 7 ? 1 : 0);
+    return this._zonedWallToUtc(+P.year, +P.month, day, 7, 0, tz);
+  }
+
+  /** Huidige Tesla-SoC (%) uit de Tesla-batterij-device, of null. */
+  async getTeslaSoc() {
+    try {
+      const devices = this.homey.settings.get('decisionlog_devices') || {};
+      const id = devices.teslaBat || 'd2ffa0cf-3b76-4185-9185-aee51364ce27';
+      const dev = await this.getDevice(id);
+      const v = dev?.capabilitiesObj?.measure_soc_level?.value
+        ?? dev?.capabilitiesObj?.measure_battery?.value;
+      return v == null ? null : Math.round(v);
+    } catch (_) { return null; }
+  }
+
+  /** Huidige override-staat + defaults voor de widget. */
+  async getTeslaOverride() {
+    const pct      = this.homey.settings.get('tesla_target_pct');
+    const deadline = this.homey.settings.get('tesla_deadline_iso');
+    const active   = !!(pct != null && deadline);
+    const defDeadline = this._nextSevenAm().toISOString();
+    const soc = await this.getTeslaSoc();
+    return {
+      active,
+      target_pct:      active ? pct : EmsApp.AUTO_TARGET_PCT,
+      deadline_iso:    active ? deadline : defDeadline,
+      auto_target_pct: EmsApp.AUTO_TARGET_PCT,
+      auto_deadline:   defDeadline,
+      floor_pct:       EmsApp.FLOOR_PCT,
+      max_horizon_h:   EmsApp.MAX_HORIZON_HOURS,
+      tesla_soc:       soc,
+      tz:              this.homey.clock.getTimezone(),
+    };
+  }
+
+  /** Zet een override (target% + deadline). Valideert en triggert herberekening. */
+  async setTeslaOverride({ target_pct, deadline_iso }) {
+    const pct = Math.round(Number(target_pct));
+    if (!Number.isFinite(pct) || pct < EmsApp.FLOOR_PCT || pct > 100) {
+      throw new Error(`Ongeldig doel-% (${target_pct}); moet ${EmsApp.FLOOR_PCT}–100 zijn`);
+    }
+    const dl = new Date(deadline_iso);
+    if (isNaN(dl.getTime())) throw new Error(`Ongeldige deadline: ${deadline_iso}`);
+    const horizonMs = EmsApp.MAX_HORIZON_HOURS * 3600 * 1000;
+    if (dl.getTime() - Date.now() > horizonMs) {
+      throw new Error(`Deadline > ${EmsApp.MAX_HORIZON_HOURS}u vooruit valt buiten de prijs-horizon`);
+    }
+    this.homey.settings.set('tesla_target_pct', pct);
+    this.homey.settings.set('tesla_deadline_iso', dl.toISOString());
+    this.log(`[Override] Tesla-doel ${pct}% tegen ${this.localTime(dl)}`);
+    await this._recalcSafe('tesla_override');
+    return this.getTeslaOverride();
+  }
+
+  /** Wis de override → terug naar auto (60% op eerstvolgende 07:00). */
+  async clearTeslaOverride() {
+    this.homey.settings.unset('tesla_target_pct');
+    this.homey.settings.unset('tesla_deadline_iso');
+    this.log('[Override] Tesla-doel terug naar auto (60% / 07:00)');
+    await this._recalcSafe('tesla_override_clear');
+    return this.getTeslaOverride();
+  }
+
+  async _recalcSafe(reason) {
+    try {
+      if (this.ems?.planningEngine) await this.ems.planningEngine.recalculate(reason);
+    } catch (err) { this.error('[Override] recalc-fout:', err.message); }
+  }
+
   // Called by api.js — runs in App context so this.homey has full device access.
   // Uses getDevicesByCapability() which returns cross-app devices (unlike getDevices()
   // which is scoped to this app only in SDK3).

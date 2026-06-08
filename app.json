@@ -793,6 +793,29 @@
           "path": "/getTodayPlan"
         }
       }
+    },
+    "ems-control": {
+      "id": "ems-control",
+      "name": {
+        "en": "EMS Tesla Target",
+        "nl": "EMS Tesla-doel"
+      },
+      "height": 3,
+      "settings": [],
+      "api": {
+        "getOverride": {
+          "method": "GET",
+          "path": "/getOverride"
+        },
+        "setOverride": {
+          "method": "POST",
+          "path": "/setOverride"
+        },
+        "clearOverride": {
+          "method": "POST",
+          "path": "/clearOverride"
+        }
+      }
     }
   },
   "api": {
