@@ -90,6 +90,8 @@
           Homey.get('hasHeatPump'),
           Homey.get('heatPumpId'),
           Homey.get('wallConnectorIp'),
+          Homey.get('battery_autonomous'),
+          Homey.get('nexus_mode'),
         ]);
       }).then(function(vals) {
         if (vals[0])  document.getElementById('gridMeterId').value    = vals[0];
@@ -103,7 +105,9 @@
         if (vals[7])          document.getElementById('evChargerId').value     = vals[7];
         if (vals[8]  != null) document.getElementById('hasHeatPump').checked   = !!vals[8];
         if (vals[10])         document.getElementById('wallConnectorIp').value = vals[10];
-        showBatSection(); showEvSection(); showChargerSection(); showHpSection();
+        if (vals[11] != null) document.getElementById('battery_autonomous').checked = !!vals[11];
+        if (vals[12])         document.getElementById('nexus_mode').value = vals[12];
+        showBatSection(); showEvSection(); showChargerSection(); showHpSection(); onAutonomousChange();
         // Load per-HP device + phase values
         Promise.all([0,1,2].map(function(i) {
           return Promise.all([Homey.get('hp_'+i+'_id'), Homey.get('hp_'+i+'_phase')]).then(function(v) {
@@ -289,6 +293,8 @@
         _Homey.set('pvMeterIds',      pvId ? [pvId] : []),
         _Homey.set('hasBattery',      document.getElementById('hasBattery').checked),
         _Homey.set('batteryId',       document.getElementById('batteryId').value       || null),
+        _Homey.set('battery_autonomous', document.getElementById('battery_autonomous').checked),
+        _Homey.set('nexus_mode',      document.getElementById('nexus_mode').value      || 'none'),
         _Homey.set('hasEv',           document.getElementById('hasEv').checked),
         _Homey.set('evDeviceId',      document.getElementById('evDeviceId').value      || null),
         _Homey.set('wallConnectorIp', document.getElementById('wallConnectorIp').value.trim() || null),
@@ -321,6 +327,26 @@
     }
 
     function showBatSection()     { document.getElementById('bat-section').style.display     = document.getElementById('hasBattery').checked  ? 'block' : 'none'; }
+
+    // Handelsbatterij-toggle: toon modus-keuze alleen voor autonome batterijen.
+    function onAutonomousChange() {
+      var auto = document.getElementById('battery_autonomous').checked;
+      document.getElementById('bat-mode-section').style.display = auto ? 'block' : 'none';
+      if (_Homey) _Homey.set('battery_autonomous', auto).then(showSaved).catch(function(){});
+    }
+
+    // Nexus-modus expliciet zetten (alleen op gebruikersactie; default 'none' = niets doen).
+    function onNexusModeChange(mode) {
+      if (!_Homey) return;
+      _Homey.set('nexus_mode', mode || 'none').catch(function(){});
+      if (mode && mode !== 'none') {
+        _Homey.api('POST', '/setBatteryMode', { mode: mode })
+          .then(function(r) { showSaved(); console.log('[EMS] setBatteryMode', r); })
+          .catch(function(err) { console.error('[EMS] setBatteryMode error:', err); });
+      } else {
+        showSaved();
+      }
+    }
     function showEvSection()      { document.getElementById('ev-section').style.display      = document.getElementById('hasEv').checked        ? 'block' : 'none'; }
     function showChargerSection() { document.getElementById('charger-section').style.display = document.getElementById('hasEvCharger').checked ? 'block' : 'none'; }
     function showHpSection()      { document.getElementById('hp-section').style.display      = document.getElementById('hasHeatPump').checked  ? 'block' : 'none'; }
@@ -583,6 +609,24 @@
               <label>Max ontlaadvermogen (W)</label>
               <input type="number" id="bat_max_discharge_w" value="2500" step="100" min="100" max="20000" />
             </div>
+          </div>
+
+          <h3>Type &amp; modus</h3>
+          <div class="sub-toggle">
+            <input type="checkbox" id="battery_autonomous" onchange="onAutonomousChange()" />
+            <label for="battery_autonomous">Handelsbatterij (autonoom) — EMS stuurt niet, leest alleen uit</label>
+          </div>
+          <p class="hint">Aanvinken voor batterijen die zelf handelen (bijv. Zonneplan Nexus / Powerplay). De EMS laat 'm dan met rust zodat hij kan blijven handelen.</p>
+
+          <div id="bat-mode-section" style="display:none">
+            <label>Nexus / Zonneplan-modus</label>
+            <select id="nexus_mode" onchange="onNexusModeChange(this.value)">
+              <option value="none">Niet wijzigen (aanbevolen — Zonneplan-app blijft de baas)</option>
+              <option value="powerplay">Powerplay (handelen op onbalansmarkt)</option>
+              <option value="selfconsumption">Zelfgebruik</option>
+              <option value="homeoptimization">Home-optimalisatie</option>
+            </select>
+            <p class="hint">Alleen kiezen als je de modus vanuit deze app wilt zetten. Wijzigt de Nexus-modus éénmalig; raakt je Powerplay-opbrengst, dus laat op 'Niet wijzigen' als je twijfelt.</p>
           </div>
         </div>
       </div>

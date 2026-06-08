@@ -245,4 +245,29 @@ module.exports = {
     }
   },
 
+  // Zet de modus van een autonome handelsbatterij (Zonneplan/Nexus) éénmalig.
+  // Alleen op expliciete gebruikersactie; default 'none' raakt de batterij niet (P2).
+  async setBatteryMode({ homey, body }) {
+    const MODE_CAP = {
+      powerplay:        'boolean.dynamiccharging',
+      selfconsumption:  'boolean.selfconsumption',
+      homeoptimization: 'boolean.homeoptimization',
+    };
+    const mode = body?.mode;
+    if (!mode || mode === 'none') return { ok: true, mode: 'none', changed: false };
+    const cap = MODE_CAP[mode];
+    if (!cap) return { ok: false, error: `onbekende modus: ${mode}` };
+    try {
+      const batteryId = homey.settings.get('batteryId');
+      if (!batteryId) return { ok: false, error: 'geen batterij geconfigureerd' };
+      const dev = await homey.app.getDevice(batteryId);
+      await dev.setCapabilityValue(cap, true);
+      homey.app.log(`[Battery] modus gezet → ${mode} (${cap}=true) op ${batteryId}`);
+      return { ok: true, mode, cap, changed: true };
+    } catch (err) {
+      homey.app.error('[Battery] setBatteryMode error:', err.message);
+      return { ok: false, error: err.message };
+    }
+  },
+
 };
