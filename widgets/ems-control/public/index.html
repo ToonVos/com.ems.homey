@@ -49,8 +49,13 @@
     .btn-auto { background: rgba(128,128,128,.14); color: var(--homey-text-color, #202124); }
     .btn:disabled { opacity: .4; cursor: default; }
 
-    .proj { margin: -4px 0 4px; font-size: 10px; opacity: .6; min-height: 13px; }
-    .proj .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+    .proj { margin: 2px 0 6px; padding: 7px 9px; border-radius: 9px;
+            background: rgba(128,128,128,.08); display: flex; flex-direction: column; gap: 2px; }
+    .pr-row  { font-size: 10px; opacity: .7; line-height: 1.35; }
+    .pr-head { font-size: 11.5px; font-weight: 700; opacity: .92; }
+    .pr-muted{ opacity: .5; }
+    .pr-foot { opacity: .42; font-size: 9px; }
+    .proj .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
     .dot-on  { background: #22c55e; }
     .dot-off { background: rgba(128,128,128,.4); }
     .dot-warn{ background: #f59e0b; }
@@ -151,18 +156,52 @@
       renderProj(s);
     }
 
+    function hhmm(local) { return local ? String(local).replace(/^.*?(\d{1,2}:\d{2}):\d{2}.*$/, '$1').replace(/:\d\d$/, m => m) : '?'; }
+    function shortWhen(local) {
+      // "9-6-2026, 05:00:00" → "05:00" (vandaag) of "za 05:00" — kort
+      if (!local) return '?';
+      const m = String(local).match(/(\d{1,2}):(\d{2})/);
+      return m ? `${m[1].padStart(2,'0')}:${m[2]}` : '?';
+    }
+
     function renderProj(s) {
       const el = $('proj');
       const sc = s.scheduler;
-      if (!sc) { el.innerHTML = ''; return; }
-      let dot = 'dot-off', txt;
-      if (sc.charge_now) { dot = 'dot-on'; txt = `laadt nu${sc.current_price_eur != null ? ` · €${sc.current_price_eur.toFixed(3)}/kWh` : ''}`; }
-      else if (sc.decision === 'at_target') { dot = 'dot-on'; txt = 'op doel'; }
-      else if (sc.decision === 'skip_disconnected') { txt = 'auto niet verbonden'; }
-      else if (sc.ready_by_local) { dot = 'dot-warn'; txt = `wacht op goedkoper · klaar ~${sc.ready_by_local.replace(/:\d\d$/, '')}`; }
-      else { txt = sc.reason || sc.decision || ''; }
-      const tag = sc.mode === 'dryrun' ? ' (proef)' : '';
-      el.innerHTML = `<span class="dot ${dot}"></span>${txt}${tag}`;
+      if (!sc) { el.innerHTML = '<div class="pr-row pr-muted">scheduler nog niet gestart…</div>'; return; }
+
+      // 1. Hoofdstatus
+      let dot = 'dot-off', icon = '○', head;
+      if (sc.decision === 'panic_charge')           { dot = 'dot-on';   icon = '🪫'; head = 'Noodladen (onder bodem)'; }
+      else if (sc.charge_now)                        { dot = 'dot-on';   icon = '⚡'; head = `Laadt nu${sc.tier ? ` (${sc.tier})` : ''}`; }
+      else if (sc.decision === 'at_target')          { dot = 'dot-on';   icon = '✓';  head = `Op plafond (${sc.ceiling_pct}%)`; }
+      else if (sc.decision === 'skip_disconnected')  { dot = 'dot-off';  icon = '🔌'; head = 'Auto niet verbonden'; }
+      else if (sc.decision === 'skip_no_soc')        { dot = 'dot-off';  icon = '…';  head = 'SoC onbekend'; }
+      else if (sc.decision === 'inactive' || sc.decision === 'mode_not_price') { dot='dot-off'; icon='○'; head='Prijs-modus uit'; }
+      else                                           { dot = 'dot-warn'; icon = '⏳'; head = 'Wacht op goedkoper uur'; }
+
+      const rows = [`<div class="pr-row pr-head"><span class="dot ${dot}"></span>${icon} ${head}</div>`];
+
+      // 2. Prijs + resterende kWh (alleen relevant bij verbonden)
+      if (sc.connected) {
+        const bits = [];
+        if (sc.current_price_eur != null) bits.push(`nu €${sc.current_price_eur.toFixed(3)}/kWh`);
+        if (sc.kwh_needed > 0)            bits.push(`nog ${sc.kwh_needed.toFixed(1)} kWh`);
+        if (bits.length) rows.push(`<div class="pr-row">${bits.join(' · ')}</div>`);
+      }
+
+      // 3. Klaar-tijden (doel + plafond) wanneer er nog geladen moet worden
+      if (sc.connected && sc.kwh_needed > 0 && sc.decision !== 'panic_charge') {
+        const parts = [];
+        if (sc.ready_by_local)  parts.push(`doel ${sc.target_pct}% ~${shortWhen(sc.ready_by_local)}`);
+        if (sc.ceil_ready_local && sc.ceiling_pct > sc.target_pct) parts.push(`plafond ${sc.ceiling_pct}% ~${shortWhen(sc.ceil_ready_local)}`);
+        if (parts.length) rows.push(`<div class="pr-row pr-muted">klaar: ${parts.join(' · ')}</div>`);
+      }
+
+      // 4. Voet: modus + laatste update
+      const modus = sc.mode === 'dryrun' ? '🧪 proef' : '🟢 live';
+      rows.push(`<div class="pr-row pr-foot">${modus}${sc.updated_local ? ` · ${shortWhen(sc.updated_local)}` : ''}</div>`);
+
+      el.innerHTML = rows.join('');
     }
 
     function setStatus(msg, kind) {
@@ -200,7 +239,7 @@
         c.addEventListener('click', () => { selPct = Number(c.dataset.pct); renderChips(); }));
       $('save').addEventListener('click', save);
       $('auto').addEventListener('click', auto);
-      Homey.ready({ height: 360 });
+      Homey.ready({ height: 440 });
       load();
       setInterval(load, 60_000);
     }

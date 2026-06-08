@@ -3,7 +3,7 @@
     "en": "EMS Tesla Target",
     "nl": "EMS Tesla-doel"
   },
-  "height": 360,
+  "height": 440,
   "settings": [],
   "api": {
     "getOverride": {

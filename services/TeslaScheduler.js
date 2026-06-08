@@ -397,10 +397,12 @@ class TeslaScheduler {
     };
     this._last = {
       decision, reason, charge_now: chargeNow, tier,
+      connected, soc,
       target_pct: mandatory, ceiling_pct: ceiling,
       kwh_needed: rec.kwh_needed, ready_by_iso: readyByIso,
-      ready_by_local: rec.ready_by_local, mode: rec.mode,
-      current_price_eur: currentPrice,
+      ready_by_local: rec.ready_by_local, ceil_ready_local: rec.ceil_ready_local,
+      mode: rec.mode, current_price_eur: currentPrice,
+      updated_local: rec.ts_local,
     };
     this._ring.push(rec);
     if (this._ring.length > RING_MAX) this._ring.shift();
