@@ -41,11 +41,11 @@ class BatteryAdapter extends ControllableBattery {
   // ─── Autonome-handelaar-detectie (module 1) ────────────────────────────────
   // True → batterij stuurt zichzelf aan; EMS onderdrukt alle laad-/ontlaadsturing.
   async _isAutonomous(bat) {
-    // Expliciete gebruikerskeuze (checkbox in instellingen) wint altijd, live.
-    const explicit = this.homey.settings.get('battery_autonomous');
-    if (explicit === true)  return true;
-    if (explicit === false) return false;
-    // Niet expliciet gezet → detecteer op driver (gecached).
+    // Checkbox kan een batterij als handelaar MARKEREN (read-only). Hij kan de
+    // bescherming NIET uitzetten voor een herkende handelaar (Zonneplan) — die
+    // blijft altijd read-only (P2: handelaar nooit aansturen).
+    if (this.homey.settings.get('battery_autonomous') === true) return true;
+    // Driver-detectie (gecached) — herkende handelaars zijn altijd autonoom.
     if (this._autonomyCache[bat.id] !== undefined) return this._autonomyCache[bat.id];
     let auto = false;
     try {
