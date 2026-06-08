@@ -37,6 +37,9 @@ const DEFAULT_DEVICES = {
   teslaBat: 'd2ffa0cf-3b76-4185-9185-aee51364ce27',
 };
 
+// ev_charging_state-waarden die betekenen: kabel NIET verbonden → niet laden.
+const DISCONNECTED_STATES = ['disconnected', 'plugged_out', 'unplugged', null];
+
 class ChargeDryRun {
 
   constructor(app) {
@@ -93,7 +96,7 @@ class ChargeDryRun {
       this._cap(D.teslaBat, 'measure_soc_level'), this._cap(D.teslaBat, 'measure_charge_limit_soc'),
     ]);
 
-    const connected = ev_state != null && ev_state !== 'disconnected';
+    const connected = !DISCONNECTED_STATES.includes(ev_state);
     const phases    = (charge_phases && charge_phases > 0) ? charge_phases : 1;
     const teslaW    = (charge_kw != null ? charge_kw * 1000 : 0);
 
