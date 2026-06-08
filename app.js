@@ -125,11 +125,14 @@ class EmsApp extends Homey.App {
     const defDeadline = this._nextSevenAm().toISOString();
     const soc = await this.getTeslaSoc();
     const sched = this.teslaScheduler?.getStatus?.() || null;
+    // UI leidend: de standaard doel-SoC komt uit ev_default_soc (instellingen),
+    // val terug op AUTO_TARGET_PCT (60) als die niet gezet is.
+    const autoTarget = this.homey.settings.get('ev_default_soc') ?? EmsApp.AUTO_TARGET_PCT;
     return {
       active,
-      target_pct:      active ? pct : EmsApp.AUTO_TARGET_PCT,
+      target_pct:      active ? pct : autoTarget,
       deadline_iso:    active ? deadline : defDeadline,
-      auto_target_pct: EmsApp.AUTO_TARGET_PCT,
+      auto_target_pct: autoTarget,
       auto_deadline:   defDeadline,
       floor_pct:       EmsApp.FLOOR_PCT,
       max_horizon_h:   EmsApp.MAX_HORIZON_HOURS,

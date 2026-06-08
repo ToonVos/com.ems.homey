@@ -35,6 +35,7 @@
       'ev_postpone_minutes',
       'ev_start_delay_ticks', 'ev_stop_delay_ticks',
       'ev_min_on_min', 'ev_min_off_min',
+      'tesla_scheduler_mode',
     ];
 
     var DEVICE_BOOL_KEYS = ['hasBattery', 'hasEv', 'hasEvCharger', 'hasHeatPump', 'ev_night_charge'];
@@ -355,6 +356,13 @@
     function toggleEvFixed(mode) {
       var row = document.getElementById('ev_fixed_row');
       if (row) row.style.display = (mode === 'fixed') ? 'block' : 'none';
+      // Prijs-modus: toon prijs-infoblok + sturing, verberg alle zon-/algemene
+      // strategie-velden (die gelden niet in prijs-modus).
+      var isPrice = (mode === 'price');
+      var price = document.getElementById('ev_grp_price');
+      var solar = document.getElementById('ev_grp_solar');
+      if (price) price.style.display = isPrice ? 'block' : 'none';
+      if (solar) solar.style.display = isPrice ? 'none'  : 'block';
     }
 
     function updatePvTotal() {
@@ -651,6 +659,7 @@
           <h3>Laadstrategie</h3>
           <label>Laadmodus</label>
           <select id="ev_charge_mode">
+            <option value="price">💶 Prijs — goedkoopste uren tot deadline (post-saldering / dynamisch)</option>
             <option value="pv">☀️ Solar only — puur zonne-overschot, nooit netladen</option>
             <option value="solar_only">☀️+ Solar+ — zonne-overschot met 5A minimum (200W buffer)</option>
             <option value="solar_and_grid">☀️🔌 Zon + net — Solar+ met nachtladen bij geplande rit</option>
@@ -658,6 +667,21 @@
             <option value="fast_charge">⚡ Snel laden — maximale stroom</option>
             <option value="off">🚫 Uit — EMS beheert de auto niet</option>
           </select>
+
+          <!-- Prijs-modus: doel/deadline via dashboard-tegel; alleen prijs telt -->
+          <div id="ev_grp_price" style="display:none">
+            <p class="hint" style="margin-top:8px">
+              In <b>Prijs</b>-modus schuift het EMS het laden naar de <b>goedkoopste uren</b> tot je deadline,
+              op <b>max. laadstroom</b> (hieronder). Doel-% en deadline stel je in via de dashboard-tegel
+              <b>"EMS Tesla-doel"</b>; zonder override geldt de <b>standaard doel-SoC</b> hierboven op de
+              eerstvolgende 07:00. Harde ondergrens 20% (panic). Zon-instellingen zijn dan niet van toepassing.
+            </p>
+            <label>Sturing</label>
+            <select id="tesla_scheduler_mode">
+              <option value="live">🟢 Live — stuurt de auto echt aan</option>
+              <option value="dryrun">🧪 Proef — rekent en logt, stuurt niets</option>
+            </select>
+          </div>
 
           <div class="row2">
             <div class="field">
@@ -667,7 +691,7 @@
             </div>
             <div class="field">
               <label>Max laadstroom (A)</label>
-              <p class="hint">Plafond bij snel laden en fast_charge</p>
+              <p class="hint">Plafond bij snel laden, fast_charge én prijs-modus</p>
               <input type="number" id="ev_max_current_a" value="16" min="6" max="32" />
             </div>
           </div>
@@ -678,6 +702,7 @@
             <input type="number" id="ev_fixed_current_a" value="8" min="6" max="32" />
           </div>
 
+          <div id="ev_grp_solar">
           <label>Netbuffer bij zon-volgend (W)</label>
           <p class="hint">Kleine netafname die het EMS accepteert voordat de laadstroom omlaag gaat. Standaard 100 W — voorkomt flikker bij asymmetrische omvormers.</p>
           <input type="number" id="ev_target_import_w" value="100" min="-1000" max="1000" step="50" />
@@ -773,6 +798,7 @@
               </div>
             </div>
           </div>
+          </div><!-- /ev_grp_solar -->
 
         </div><!-- /indent -->
       </div><!-- /ev-section -->

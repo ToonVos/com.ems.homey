@@ -286,6 +286,11 @@ class EvChargeController extends Charger {
     // Reload settings each tick so changes take effect immediately
     this._loadSettings();
 
+    // ── Prijs-modus: TeslaScheduler beheert de auto volledig (goedkoopste uren
+    //    tot deadline, pre-saldering). EvController doet hier niets, anders zou
+    //    de default-tak op zonne-overschot gaan sturen en met de scheduler vechten.
+    if (this._mode === 'price') return;
+
     // ── Vehicle presence check ────────────────────────────────────────────
     if (!this.tesla.isVehiclePresent()) {
       if (this._currentTargetA !== 0) {

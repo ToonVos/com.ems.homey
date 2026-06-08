@@ -125,6 +125,19 @@ class TeslaScheduler {
     const tesla = this.app.ems?.tesla;
     if (!tesla) return;
 
+    // Alleen actief in laadmodus 'price' — anders beheert Menno's EvController
+    // (zon/vast/uit) de auto en doen wij niets (geen dubbele sturing).
+    const chargeMode = this.homey.settings.get('ev_charge_mode') || 'solar_only';
+    if (chargeMode !== 'price') {
+      this._lastChargingCmd = null;
+      this._pending = null;
+      this._last = {
+        decision: 'mode_not_price', mode: this._mode(), charge_now: false,
+        reason: `laadmodus '${chargeMode}' — prijs-scheduler inactief`,
+      };
+      return;
+    }
+
     const { maxA, phases, cap, floor, powerKw } = this._params();
 
     // 1. Auto-toestand
