@@ -16,7 +16,7 @@ const config = {
   contractType:   'fixed',
   priceImport:    0.30,
   priceExport:    0.09,
-  dayAheadProvider: 'entso-e',
+  dayAheadProvider: 'pbth',
   dayAheadApiKey:   '',
   zeroExport:     false,
   pvStrings:      [],

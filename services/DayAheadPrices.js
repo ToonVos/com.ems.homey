@@ -35,7 +35,10 @@ class DayAheadPrices {
     // de geconfigureerde provider als geen device beschikbaar is.
     this._pbthDeviceId = this.homey.settings.get('pbth_price_device')
       || 'cc19fcf6-8f6f-4174-8f9b-6163b630f360';
-    this._provider     = this._pbthDeviceId ? 'pbth' : (provider || 'entso-e');
+    // Respecteer de keuze uit de app (wizard/instellingen); default = pbth.
+    this._provider = provider || 'pbth';
+    // Vangrail: ENTSO-E zonder API-key 401't → val terug op PbtH (geen key nodig).
+    if (this._provider === 'entso-e' && !this._apiKey) this._provider = 'pbth';
     this.app.log(`[DayAhead] Provider: ${this._provider}`);
   }
 
