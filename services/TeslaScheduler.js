@@ -37,6 +37,7 @@ const SLOT_MIN     = 15;               // PricePredictor-resolutie
 const SLOT_H       = SLOT_MIN / 60;
 const VOLTAGE      = 230;
 const EFFICIENCY   = 0.91;             // on-board charger @ vol vermogen (~16A)
+const WEEK_MS      = 7 * 24 * 60 * 60 * 1000;  // opportunistisch hooguit 1×/week
 const VERIFY_MS    = 3 * 60 * 1000;    // 3 min na commando: laadt/stopt hij echt?
 const MAX_WAKE_RETRIES = 2;            // max keer wakker maken + opnieuw sturen
 
@@ -161,9 +162,17 @@ class TeslaScheduler {
     const ov = await this.app.getTeslaOverride();
     const mandatory  = ov.target_pct;                 // override-doel of standaard-doel
     const deadline   = new Date(ov.deadline_iso);
-    const oppCeiling = this.homey.settings.get('ev_opportunistic_soc') ?? 85;
+    // Opportunistisch plafond, hard afgetopt op 85% (bovenkant voor de accu).
+    const oppCeiling = Math.min(this.homey.settings.get('ev_opportunistic_soc') ?? 85, 85);
     // Bij actieve override geen opportunistisch extra: plafond = het gekozen doel.
     const ceiling = ov.active ? mandatory : Math.max(mandatory, oppCeiling);
+
+    // Wekelijkse opportunistische top-up: zodra het plafond (≈) bereikt is, 7
+    // dagen op slot zodat dit hooguit 1× per week gebeurt.
+    if (!ov.active && soc != null && soc >= oppCeiling - 1) {
+      const lastOpp = this.homey.settings.get('tesla_opp_last_ts') || 0;
+      if ((Date.now() - lastOpp) >= WEEK_MS) this.homey.settings.set('tesla_opp_last_ts', Date.now());
+    }
 
     // 3. Horizon
     const horizon = (this.app.pricePredictor?.getHorizon() || [])
@@ -222,12 +231,14 @@ class TeslaScheduler {
         ? this._pickLatest(within,   bandKwh(MID, 100), slotKwh, mandSet)
         : this._pickCheapest(within, bandKwh(MID, 100), slotKwh, mandSet));
 
-      // Opportunistisch tot plafond (hele horizon, excl. verplicht). Met guard niet
-      // boven 80% houden → opportunistisch plafond afgetopt op 80%.
-      const oppCap  = guard ? Math.min(ceiling, HOLD) : ceiling;
-      const fromOpp = Math.max(soc, mandatory);
-      const need2   = soc < oppCap ? Math.max(0, (oppCap - fromOpp) / 100 * cap) / EFFICIENCY : 0;
-      const oppSet  = this._pickCheapest(fullWin, need2, slotKwh, mandSet).set;
+      // Opportunistisch tot plafond (≤85%), hele horizon, excl. verplicht.
+      // Hooguit 1× per week: na het bereiken van het plafond 7 dagen op slot.
+      const lastOpp   = this.homey.settings.get('tesla_opp_last_ts') || 0;
+      const oppLocked = (now - lastOpp) < WEEK_MS;
+      const fromOpp   = Math.max(soc, mandatory);
+      const need2     = (!oppLocked && soc < ceiling)
+        ? Math.max(0, (ceiling - fromOpp) / 100 * cap) / EFFICIENCY : 0;
+      const oppSet    = this._pickCheapest(fullWin, need2, slotKwh, mandSet).set;
 
       kwhNeeded = (soc < mandatory ? (mandatory - soc) / 100 * cap / EFFICIENCY : 0) + need2;
       selectedCount = mandSet.size + oppSet.size;

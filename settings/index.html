@@ -687,15 +687,15 @@
             </div>
             <div class="field">
               <label>Opportunistisch plafond (%)</label>
-              <input type="number" id="ev_opportunistic_soc" value="85" min="50" max="100" />
-              <p class="hint">Tot dit niveau in de allergoedkoopste week-uren.</p>
+              <input type="number" id="ev_opportunistic_soc" value="85" min="50" max="85" />
+              <p class="hint">Hooguit 1× per week tot dit niveau (max 85%) in de allergoedkoopste week-uren.</p>
             </div>
           </div>
           <div class="toggle-row" style="margin-top:6px">
             <input type="checkbox" id="ev_battery_health" />
             <label for="ev_battery_health">Batterijgezondheid bewaken</label>
           </div>
-          <p class="hint">Houdt de accu langer goed door hoge SoC niet lang vast te houden: tot 80% wordt in de goedkoopste uren geladen; <b>80–90%</b> pas in goedkope uren ≤6&nbsp;uur vóór de klaar-tijd; de <b>laatste 10% (90–100%)</b> pas op het laatste moment vóór de klaar-tijd. Opportunistisch laden stopt dan bij 80%. Uit = altijd puur de goedkoopste uren.</p>
+          <p class="hint">Houdt de accu langer goed door hoge SoC niet lang vast te houden: tot 80% wordt in de goedkoopste uren geladen; <b>80–90%</b> pas in goedkope uren ≤6&nbsp;uur vóór de klaar-tijd; de <b>laatste 10% (90–100%)</b> pas op het laatste moment vóór de klaar-tijd. Uit = altijd puur de goedkoopste uren. (Opportunistisch laden gaat tot max 85%, hooguit 1× per week.)</p>
 
           <!-- Laadstrategie -->
           <h3>Laadstrategie</h3>
