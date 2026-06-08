@@ -1,3 +1,5 @@
 Home EMS turns your Homey Pro into a full-featured energy management system. It intelligently coordinates your solar panels, home battery, EV charger and heat pumps to maximise self-consumption and minimise energy costs.
 
 Every evening the EMS calculates a detailed plan for the next day based on the weather forecast, expected solar production and your energy prices. During the day it follows this plan in real-time, adjusting automatically when clouds roll in or your energy use changes. For Tesla owners, the Wall Connector is read directly over your local network for precise, real-time charge control without cloud delays or API rate limits.
+
+On a dynamic energy contract you can also choose the new "Price" charge mode: the EMS schedules Tesla charging into the cheapest hours until your deadline, with a dashboard tile to set the target percentage and time, battery-health-aware timing for high charge levels, and an optional weekly opportunistic top-up during the cheapest hours of the week.

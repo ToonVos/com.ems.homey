@@ -2,5 +2,9 @@
   "1.0.0": {
     "en": "Initial release. Solar, battery, EV (Tesla + Wall Connector) and heat pump management with daily planning based on weather forecast.",
     "nl": "Eerste versie. Zonnepanelen, batterij, EV (Tesla + Wall Connector) en warmtepomp-beheer met dagplanning op basis van weersvoorspelling."
+  },
+  "1.6.1": {
+    "en": "Fork: price-based Tesla charging for dynamic contracts. New 'price' charge mode that schedules charging into the cheapest hours until a deadline; dashboard tile to set target %/time; direct Tesla control (no manual flow); charge verification + wake; battery-health guard; opportunistic weekly top-up (max 85%, once/week); EnergyZero full-day prices; weekly tuning/debug layer with retention.",
+    "nl": "Fork: prijs-gestuurd Tesla-laden voor dynamische contracten. Nieuwe laadmodus 'Prijs' die het laden naar de goedkoopste uren tot een deadline schuift; dashboard-tegel voor doel-%/tijd; directe Tesla-sturing (geen handmatige flow); laad-verificatie + wakker maken; batterijgezondheid-bewaking; opportunistisch wekelijks bijladen (max 85%, 1×/week); EnergyZero volledige dagprijzen; week-tuning-/debug-laag met retentie."
   }
 }

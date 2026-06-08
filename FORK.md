@@ -2,7 +2,9 @@
 
 Dit is een **fork** van [`com.ems.homey`](https://github.com/b2hvty299s-ux/com.ems.homey) van **Menno de Braak** (MIT). Alle credit voor de basis-app — de adapter-architectuur, capability-map, Open-Meteo solar-forecast, planning-engine, hysterese en dashboard-widgets — is van hem.
 
-Deze fork voegt onderscheidende logica toe voor een specifieke setup (Tesla Model S 100D 2018, Zonneplan Nexus als autonome handelaar, geen Wall Connector, post-saldering). Het ontwerp en de rationale leven in de aparte "brein"-repo `ems-homey`.
+Deze fork voegt onderscheidende logica toe voor een specifieke setup (Tesla Model S 100D 2018, Zonneplan Nexus als autonome handelaar, geen Wall Connector, dynamisch EPEX-contract). De huidige focus is **prijs-gestuurd Tesla-laden onder saldering** (export ≈ import → alleen het inkoop-tijdstip telt). Het ontwerp en de rationale leven in de aparte "brein"-repo `ems-homey`.
+
+> **Geïmplementeerde regie:** zie [`docs/EMS-TESLA-PRICE-CHARGING.md`](docs/EMS-TESLA-PRICE-CHARGING.md) voor de volledige beschrijving (scheduler, prijs-horizon, dashboard-override, batterijgezondheid, tuning-laag).
 
 ## Verhouding tot upstream
 
@@ -15,17 +17,26 @@ Deze fork voegt onderscheidende logica toe voor een specifieke setup (Tesla Mode
 
 Elke module = eigen feature-branch, PR-baar naar upstream:
 
-| Branch | Module | Type |
-|---|---|---|
-| `feat/m1-autonomous-battery` | Autonome batterij (read-only Nexus, niet aansturen) | nieuw `interfaces/` + config-vlag |
-| `feat/m2-tesla-no-wallconnector` | Tesla-aansturing zonder Wall Connector + command-budget | nieuw `devices/` + hysterese in `EvChargeController` |
-| `feat/m3-allin-price` | All-in prijs + adaptieve goedkoop-drempel | uitbreiding `services/DayAheadPrices` |
-| `feat/m4-provenance` | Herkomst-tracking (pv_share) | nieuw `services/ProvenanceTracker` |
-| `feat/m5-aging-cost` | Accu-veroudering geprijsd + `optimalChargeCap` | nieuw `services/AgingCost` |
-| `feat/m6-trip-dates` | Datum/weken-vooruit ritplanning + vakantie-hold | uitbreiding `services/TripPlanner` |
-| `feat/m7-decision-log` | Beslis-log voor terugwerkende analyse | nieuw `services/DecisionLog` |
+Elke module = eigen feature-branch, PR-baar naar upstream. Status per 2026-06-08:
 
-Modules 1 en 2 zijn **blockers** om de app in deze setup te laten draaien (autonome batterij + geen Wall Connector); 3-6 zijn optimalisatie; 7 is de validatie-ruggengraat.
+| Branch | Module | Status |
+|---|---|---|
+| `feat/m1-autonomous-battery` | Autonome batterij (read-only Nexus) | ✅ |
+| `feat/m7-decision-log` | Beslis-log voor terugwerkende analyse | ✅ |
+| `feat/m8-tesla-override-widget` | Dashboard-tegel "EMS Tesla-doel" (%/deadline-override) | ✅ |
+| `feat/m9-tesla-price-scheduler` | Prijs-gestuurde laadregie (`TeslaScheduler`, modus `price`) | ✅ |
+| `feat/m10-direct-tesla-control` | Directe sturing via `runFlowCardAction` (geen flow-koppeling) | ✅ |
+| `feat/m11-charge-verify-wake` | Laad-verificatie na 3 min + `car_wake_up` bij mismatch | ✅ |
+| `feat/m12-price-charge-mode-settings` | Laadmodus `price` + EV-instellingen herindeling | ✅ |
+| `feat/m13-floor-soc-setting` | Instelbare bodem-SoC (panic-vloer) | ✅ |
+| `feat/m14-opportunistic-week-charging` | Instelbare klaar-tijd + opportunistisch tot plafond + snelheids-observer | ✅ |
+| `feat/m15-battery-health-guard` | Batterijgezondheid: bandgewijze timing hoge SoC | ✅ |
+| `feat/m16-tuning-debug-layer` | Week-tuning-laag (correlatie, retentie, week-rapport) | ✅ |
+| `feat/m17-energyzero-fullday` | EnergyZero volledige uurprijzen vandaag+morgen | ✅ |
+
+Module 1 (autonome batterij) en de Tesla-sturing zonder Wall Connector zijn **blockers** om de app in deze setup te laten draaien; de prijs-stack (m8–m17) is de onderscheidende regie. Volledige beschrijving: [`docs/EMS-TESLA-PRICE-CHARGING.md`](docs/EMS-TESLA-PRICE-CHARGING.md).
+
+**Nog open (voorraad):** herkomst-tracking (pv_share), accu-veroudering geprijsd + `optimalChargeCap`, datum/weken-vooruit ritplanning + vakantie-hold, post-2027 Nexus-dump-vóór-zonsopgang.
 
 ## Afspraken
 
