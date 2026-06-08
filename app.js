@@ -44,6 +44,18 @@ class EmsApp extends Homey.App {
     return this._homeyApi.devices.getDevice({ id });
   }
 
+  // Roep een device-scoped flow-actie van een ANDERE app rechtstreeks aan
+  // (bv. Tesla-app: charge_current/charge_limit/charging_on) zonder dat de
+  // gebruiker een flow hoeft te koppelen. runFlowCardAction leidt de uri af uit
+  // de volledige kaart-id (homey:device:<deviceId>:<cardId>).
+  async runDeviceAction(deviceId, cardId, args = {}) {
+    if (!this._homeyApi) {
+      this._homeyApi = await HomeyAPIV3Local.createAppAPI({ homey: this.homey });
+    }
+    const id = `homey:device:${deviceId}:${cardId}`;
+    return this._homeyApi.flow.runFlowCardAction({ id, args });
+  }
+
   // ─── Tesla laaddoel-override (dashboard-widget ems-control) ────────────────
   // Pre-saldering geldt: enige knop = wanneer kopen. Default = 60% gegarandeerd
   // op eerstvolgende 07:00; gebruiker kan dit overschrijven met een hoger %

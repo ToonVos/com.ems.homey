@@ -80,6 +80,12 @@ class TeslaScheduler {
     return { maxA, phases, cap, floor, powerKw };
   }
 
+  /** Device-id van de Tesla-batterij (waar de laad-flow-acties op zitten). */
+  _teslaBatId() {
+    const d = this.homey.settings.get('decisionlog_devices') || {};
+    return d.teslaBat || 'd2ffa0cf-3b76-4185-9185-aee51364ce27';
+  }
+
   async _tickSafe() {
     try { await this._tick(); }
     catch (err) { this.app.error('[TeslaSched] fout:', err.message); }
@@ -224,12 +230,28 @@ class TeslaScheduler {
     );
   }
 
-  async _drive(tesla, wantCharge, maxA, targetPct) {
+  // Stuurt de Tesla RECHTSTREEKS via de device-flow-acties van de Tesla-app
+  // (geen door de gebruiker gekoppelde flow nodig). charge_limit 50–100,
+  // charge_current 0–32A, charging_on {start,stop}.
+  async _drive(_tesla, wantCharge, maxA, targetPct) {
+    const dev = this._teslaBatId();
     try {
-      // Zet eerst de laadlimiet op het doel zodat de auto zelf bij target stopt.
-      await tesla.setChargeLimit(targetPct);
-      if (wantCharge) await tesla.setChargeCurrent(maxA);  // start + amps (vol vermogen)
-      else            await tesla.stopCharging();
+      if (wantCharge) {
+        // Laadlimiet alleen (her)zetten als die wijzigt — bespaart commando's.
+        const limit = Math.max(50, Math.min(100, Math.round(targetPct)));
+        if (this._lastLimit !== limit) {
+          await this.app.runDeviceAction(dev, 'charge_limit', { limit });
+          this._lastLimit = limit;
+        }
+        const amps = Math.max(1, Math.min(32, Math.round(maxA)));
+        if (this._lastAmps !== amps) {
+          await this.app.runDeviceAction(dev, 'charge_current', { current: amps });
+          this._lastAmps = amps;
+        }
+        await this.app.runDeviceAction(dev, 'charging_on', { action: 'start' });
+      } else {
+        await this.app.runDeviceAction(dev, 'charging_on', { action: 'stop' });
+      }
     } catch (err) {
       this.app.error('[TeslaSched] sturing-fout:', err.message);
     }
