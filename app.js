@@ -102,12 +102,18 @@ class EmsApp extends Homey.App {
     }).formatToParts(date).reduce((a, x) => (a[x.type] = x.value, a), {});
   }
 
-  /** Eerstvolgende 07:00 (lokaal) in de toekomst, als UTC-Date. */
-  _nextSevenAm() {
+  /** Eerstvolgende standaard klaar-tijd (instelbaar via ev_default_deadline,
+   *  "HH:MM", default 07:00) in de toekomst, als UTC-Date. */
+  _nextDefaultDeadline() {
     const tz = this.homey.clock.getTimezone();
-    const P  = this._tzParts(new Date(), tz);
-    const day = +P.day + (Number(P.hour) >= 7 ? 1 : 0);
-    return this._zonedWallToUtc(+P.year, +P.month, day, 7, 0, tz);
+    const [hh, mm] = String(this.homey.settings.get('ev_default_deadline') || '07:00')
+      .split(':').map(Number);
+    const H = Number.isFinite(hh) ? hh : 7;
+    const M = Number.isFinite(mm) ? mm : 0;
+    const P = this._tzParts(new Date(), tz);
+    const nowMin = Number(P.hour) * 60 + Number(P.minute);
+    const day = +P.day + (nowMin >= H * 60 + M ? 1 : 0);
+    return this._zonedWallToUtc(+P.year, +P.month, day, H, M, tz);
   }
 
   /** Huidige Tesla-SoC (%) uit de Tesla-batterij-device, of null. */
@@ -127,7 +133,7 @@ class EmsApp extends Homey.App {
     const pct      = this.homey.settings.get('tesla_target_pct');
     const deadline = this.homey.settings.get('tesla_deadline_iso');
     const active   = !!(pct != null && deadline);
-    const defDeadline = this._nextSevenAm().toISOString();
+    const defDeadline = this._nextDefaultDeadline().toISOString();
     const soc = await this.getTeslaSoc();
     const sched = this.teslaScheduler?.getStatus?.() || null;
     // UI leidend: de standaard doel-SoC komt uit ev_default_soc (instellingen),

@@ -145,24 +145,37 @@ class TeslaScheduler {
     const connected = st?.connected ?? false;
     const soc       = st?.soc ?? null;
 
-    // 2. Override of default-doel
-    const ov = await this.app.getTeslaOverride();
-    const targetPct  = ov.target_pct;
-    const deadline   = new Date(ov.deadline_iso);
+    // Laadsnelheid-observer: meet echte %/uur tijdens laden en gebruik dat voor
+    // "hoeveel uren nodig"; val terug op berekende powerKw tot er data is.
+    this._observeRate(st, cap);
+    const effRate = this._effectiveRateKw(powerKw);   // kW
+    const slotKwh = effRate * SLOT_H;
 
-    // 3. Horizon [nu … deadline]
+    // 2. Override of standaard-doel + opportunistisch plafond
+    const ov = await this.app.getTeslaOverride();
+    const mandatory  = ov.target_pct;                 // override-doel of standaard-doel
+    const deadline   = new Date(ov.deadline_iso);
+    const oppCeiling = this.homey.settings.get('ev_opportunistic_soc') ?? 85;
+    // Bij actieve override geen opportunistisch extra: plafond = het gekozen doel.
+    const ceiling = ov.active ? mandatory : Math.max(mandatory, oppCeiling);
+
+    // 3. Horizon
     const horizon = (this.app.pricePredictor?.getHorizon() || [])
-      .map(h => ({ ...h, t: new Date(h.ts).getTime() }));
-    const now = Date.now();
+      .map(h => ({ ...h, t: new Date(h.ts).getTime() }))
+      .sort((a, b) => a.t - b.t);
+    const now  = Date.now();
     const dlMs = deadline.getTime();
+    const cur  = horizon.find(h => now >= h.t && now < h.t + SLOT_MIN * 60_000);
+    const currentPrice = cur ? cur.import_eur : null;
 
     let decision = 'idle';
     let reason = '';
     let chargeNow = false;
     let kwhNeeded = 0;
-    let readyByIso = null;
+    let readyByIso = null;     // klaar-tijd standaard-doel
+    let ceilReadyIso = null;   // klaar-tijd plafond
     let selectedCount = 0;
-    let currentPrice = null;
+    let tier = null;
 
     if (!connected) {
       decision = 'skip_disconnected';
@@ -170,69 +183,64 @@ class TeslaScheduler {
     } else if (soc == null) {
       decision = 'skip_no_soc';
       reason = 'SoC onbekend';
-    } else if (soc >= targetPct) {
+    } else if (soc >= ceiling) {
       decision = 'at_target';
-      reason = `SoC ${soc}% ≥ doel ${targetPct}%`;
+      reason = `SoC ${soc}% ≥ plafond ${ceiling}%`;
+    } else if (soc <= floor) {
+      chargeNow = true;
+      decision = 'panic_charge';
+      reason = `SoC ${soc}% ≤ vloer ${floor}% — laden ongeacht prijs`;
     } else {
-      // kWh nodig + uren nodig
-      kwhNeeded = Math.max(0, (targetPct - soc) / 100 * cap) / EFFICIENCY;
-      const slotKwh = powerKw * SLOT_H;
+      // Laag 1 (verplicht): goedkoopste slots in [nu, deadline] tot standaard-doel.
+      const need1 = soc < mandatory ? Math.max(0, (mandatory - soc) / 100 * cap) / EFFICIENCY : 0;
+      const within = horizon.filter(h => h.t >= now - SLOT_MIN * 60_000 && h.t <= dlMs);
+      const sel1 = this._pickCheapest(within, need1, slotKwh, null);
 
-      // PANIC: onder de vloer → laden, prijs negeren
-      if (soc <= floor) {
-        chargeNow = true;
-        decision = 'panic_charge';
-        reason = `SoC ${soc}% ≤ vloer ${floor}% — laden ongeacht prijs`;
-      } else if (now > dlMs) {
-        // Deadline voorbij maar doel niet gehaald → doorladen (SoC-garantie > tijd)
+      // Laag 2 (opportunistisch): goedkoopste slots in de HELE horizon (excl. laag 1)
+      // om van doel → plafond te gaan; geen deadline → alleen écht goedkope uren.
+      const fromOpp = Math.max(soc, mandatory);
+      const need2 = soc < ceiling ? Math.max(0, (ceiling - fromOpp) / 100 * cap) / EFFICIENCY : 0;
+      const fullWin = horizon.filter(h => h.t >= now - SLOT_MIN * 60_000);
+      const sel2 = this._pickCheapest(fullWin, need2, slotKwh, sel1.set);
+
+      kwhNeeded = need1 + need2;
+      selectedCount = sel1.count + sel2.count;
+      if (sel1.lastTs) readyByIso = new Date(sel1.lastTs + SLOT_MIN * 60_000).toISOString();
+      const unionLast = Math.max(sel1.lastTs || 0, sel2.lastTs || 0);
+      if (unionLast) ceilReadyIso = new Date(unionLast + SLOT_MIN * 60_000).toISOString();
+
+      if (now > dlMs && soc < mandatory) {
+        // SoC-garantie: deadline voorbij, standaard-doel niet gehaald → doorladen.
         chargeNow = true;
         decision = 'past_deadline';
-        reason = `deadline voorbij, SoC ${soc}% < doel ${targetPct}% — doorladen`;
+        reason = `deadline voorbij, SoC ${soc}% < doel ${mandatory}% — doorladen`;
+      } else if (!cur) {
+        chargeNow = true;
+        decision = 'no_prices';
+        reason = 'geen prijs-horizon — laden';
       } else {
-        // Selecteer goedkoopste slots tot deadline tot kWh gedekt
-        const slots = horizon
-          .filter(h => h.t >= now - SLOT_MIN * 60_000 && h.t <= dlMs)
-          .sort((a, b) => a.import_eur - b.import_eur);
-
-        if (slots.length === 0) {
-          // Geen prijsdata in venster → niet selectief kunnen zijn → laden
-          chargeNow = true;
-          decision = 'no_prices';
-          reason = 'geen prijs-horizon in venster — laden';
-        } else {
-          let acc = 0;
-          const selected = new Set();
-          for (const s of slots) {
-            if (acc >= kwhNeeded) break;
-            selected.add(s.t);
-            acc += slotKwh;
-            selectedCount++;
-          }
-          // Projectie: laatste (chronologisch) geselecteerde slot + 15min = klaar-tijd
-          const selTimes = [...selected].sort((a, b) => a - b);
-          if (selTimes.length) readyByIso = new Date(selTimes[selTimes.length - 1] + SLOT_MIN * 60_000).toISOString();
-
-          // Huidig slot bepalen
-          const cur = horizon.find(h => now >= h.t && now < h.t + SLOT_MIN * 60_000);
-          currentPrice = cur ? cur.import_eur : null;
-          chargeNow = cur ? selected.has(cur.t) : true;  // geen huidig slot → veilig laden
-          decision = chargeNow ? 'charge_cheap_slot' : 'wait_cheaper';
-          reason = chargeNow
-            ? `goedkoop slot (€${currentPrice?.toFixed(3) ?? '?'}) — ${selectedCount} slots gekozen voor ${kwhNeeded.toFixed(1)}kWh`
-            : `nu €${currentPrice?.toFixed(3) ?? '?'} — wacht op goedkopere uren (klaar ~${readyByIso ? this.app.localTime(new Date(readyByIso)) : '?'})`;
-        }
+        const inMand = sel1.set.has(cur.t);
+        const inOpp  = sel2.set.has(cur.t);
+        chargeNow = inMand || inOpp;
+        tier = inMand ? 'verplicht' : (inOpp ? 'opportunistisch' : null);
+        decision = chargeNow ? (inMand ? 'charge_mandatory' : 'charge_opportunistic') : 'wait_cheaper';
+        reason = chargeNow
+          ? `${tier} laden (€${currentPrice?.toFixed(3) ?? '?'}) — ${selectedCount} slots voor ${kwhNeeded.toFixed(1)}kWh @ ${effRate.toFixed(1)}kW`
+          : `nu €${currentPrice?.toFixed(3) ?? '?'} — wacht (doel ${mandatory}% ~${readyByIso ? this.app.localTime(new Date(readyByIso)) : '?'}, plafond ${ceiling}% ~${ceilReadyIso ? this.app.localTime(new Date(ceilReadyIso)) : '?'})`;
       }
     }
 
     // 4. Sturing (live) of alleen loggen (dryrun) — idle-skip op ongewijzigde wens
     const live = this._isLive();
     let commanded = null;
-    if (connected && soc != null && soc < targetPct) {
+    if (connected && soc != null && soc < ceiling) {
       const wantCharge = chargeNow;
       if (this._lastChargingCmd !== wantCharge) {
         commanded = wantCharge ? 'start' : 'stop';
         if (live) {
-          await this._drive(tesla, wantCharge, maxA, targetPct);
+          // Laadlimiet = plafond zodat de auto tot het plafond kan; de scheduler
+          // stopt zelf eerder zodra het doel is gehaald of de uren op zijn.
+          await this._drive(tesla, wantCharge, maxA, ceiling);
           this._pending = { want: wantCharge, at: Date.now(), retries: 0 };  // verifieer over 3 min
         }
         this._lastChargingCmd = wantCharge;
@@ -261,7 +269,7 @@ class TeslaScheduler {
         this._pending.retries++;
         verify = `mismatch→wake#${this._pending.retries}`;
         this.app.log(`[TeslaSched] mismatch (wil ${this._pending.want ? 'laden' : 'stoppen'}, auto ${actual ? 'laadt' : 'laadt niet'}) — wakker maken + opnieuw (#${this._pending.retries})`);
-        await this._wakeAndRetry(this._pending.want, maxA, targetPct);
+        await this._wakeAndRetry(this._pending.want, maxA, ceiling);
         this._pending.at = Date.now();
         this._bumpCmd();
       } else {
@@ -277,19 +285,22 @@ class TeslaScheduler {
       ts: new Date().toISOString(),
       ts_local: this.app.localTime(),
       mode: live ? 'live' : 'dryrun',
-      connected, soc, target_pct: targetPct,
+      connected, soc, target_pct: mandatory, ceiling_pct: ceiling, tier,
       deadline_local: this.app.localTime(deadline),
       override_active: ov.active,
       decision, reason, charge_now: chargeNow,
       kwh_needed: +kwhNeeded.toFixed(2),
       power_kw: +powerKw.toFixed(2),
+      eff_rate_kw: +effRate.toFixed(2),
       selected_slots: selectedCount,
       current_price_eur: currentPrice,
       ready_by_local: readyByIso ? this.app.localTime(new Date(readyByIso)) : null,
+      ceil_ready_local: ceilReadyIso ? this.app.localTime(new Date(ceilReadyIso)) : null,
       commanded, verify, cmd_count_today: this._cmdCount,
     };
     this._last = {
-      decision, reason, charge_now: chargeNow,
+      decision, reason, charge_now: chargeNow, tier,
+      target_pct: mandatory, ceiling_pct: ceiling,
       kwh_needed: rec.kwh_needed, ready_by_iso: readyByIso,
       ready_by_local: rec.ready_by_local, mode: rec.mode,
       current_price_eur: currentPrice,
@@ -301,8 +312,52 @@ class TeslaScheduler {
     this.app.log(
       `[TeslaSched] ${decision}${commanded ? ` → ${live ? 'LIVE' : 'DRYRUN'} ${commanded}@${maxA}A` : ''}` +
       `${verify ? ` [verify:${verify}]` : ''}` +
-      ` | SoC ${soc ?? '?'}%→${targetPct}% | ${reason}`
+      ` | SoC ${soc ?? '?'}%→${mandatory}%(plafond ${ceiling}%) | ${reason}`
     );
+  }
+
+  /** Goedkoopste slots tot kwhNeeded gedekt is (excl. excludeSet). */
+  _pickCheapest(slots, kwhNeeded, slotKwh, excludeSet) {
+    const set = new Set();
+    let count = 0, acc = 0, lastTs = null;
+    if (kwhNeeded <= 0 || slotKwh <= 0) return { set, count, lastTs };
+    const sorted = slots
+      .filter(s => !excludeSet || !excludeSet.has(s.t))
+      .sort((a, b) => a.import_eur - b.import_eur);
+    for (const s of sorted) {
+      if (acc >= kwhNeeded) break;
+      set.add(s.t); acc += slotKwh; count++;
+    }
+    if (set.size) lastTs = Math.max(...set);   // laatste (chronologisch) gekozen slot
+    return { set, count, lastTs };
+  }
+
+  /** Observeert echte laadsnelheid (%/uur → kWh/uur) als EWMA in settings. */
+  _observeRate(st, cap) {
+    const charging = st?.charging ?? false;
+    const soc = st?.soc ?? null;
+    const now = Date.now();
+    if (!charging || soc == null) { this._rateSample = null; return; }
+    if (!this._rateSample) { this._rateSample = { ts: now, soc }; return; }
+    const dtH  = (now - this._rateSample.ts) / 3_600_000;
+    const dSoc = soc - this._rateSample.soc;
+    if (dtH >= 0.083 && dSoc > 0) {                 // ≥5 min en SoC gestegen
+      const kwhPerH = (dSoc / 100 * cap) / dtH;
+      if (kwhPerH > 1 && kwhPerH < 50) {
+        const prev = this.homey.settings.get('tesla_observed_kwh_per_h');
+        const ewma = prev ? prev * 0.7 + kwhPerH * 0.3 : kwhPerH;
+        this.homey.settings.set('tesla_observed_kwh_per_h', +ewma.toFixed(2));
+      }
+      this._rateSample = { ts: now, soc };
+    } else if (dSoc < 0) {
+      this._rateSample = { ts: now, soc };          // reset bij daling
+    }
+  }
+
+  /** Effectieve laadsnelheid (kW): gemeten EWMA indien plausibel, anders berekend. */
+  _effectiveRateKw(powerKw) {
+    const obs = this.homey.settings.get('tesla_observed_kwh_per_h');
+    return (obs && obs > 1 && obs < 50) ? obs : powerKw;
   }
 
   // Stuurt de Tesla RECHTSTREEKS via de device-flow-acties van de Tesla-app

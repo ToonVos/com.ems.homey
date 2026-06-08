@@ -12,7 +12,7 @@
       'pv_peak_kw', 'pv_peak_kw_l1', 'pv_peak_kw_l2', 'pv_peak_kw_l3',
       'pv_l1_peak_hour', 'pv_l2_peak_hour', 'pv_l3_peak_hour',
       'bat_capacity_kwh', 'bat_max_charge_w', 'bat_max_discharge_w',
-      'hp_offset_deg', 'ev_capacity_kwh', 'ev_default_soc', 'ev_floor_soc', 'surplus_threshold',
+      'hp_offset_deg', 'ev_capacity_kwh', 'ev_default_soc', 'ev_floor_soc', 'ev_opportunistic_soc', 'surplus_threshold',
       'ev_max_current_a', 'ev_min_current_a', 'ev_fixed_current_a', 'ev_target_import_w',
       'ev_peak1_start', 'ev_peak1_end', 'ev_peak2_start', 'ev_peak2_end',
       'ev_night_start', 'ev_night_end', 'ev_bat_night_min_soc',
@@ -28,14 +28,14 @@
       'pv_peak_kw', 'pv_peak_kw_l1', 'pv_peak_kw_l2', 'pv_peak_kw_l3',
       'pv_l1_peak_hour', 'pv_l2_peak_hour', 'pv_l3_peak_hour',
       'bat_capacity_kwh', 'bat_max_charge_w', 'bat_max_discharge_w',
-      'hp_offset_deg', 'ev_capacity_kwh', 'ev_default_soc', 'ev_floor_soc', 'surplus_threshold',
+      'hp_offset_deg', 'ev_capacity_kwh', 'ev_default_soc', 'ev_floor_soc', 'ev_opportunistic_soc', 'surplus_threshold',
       'ev_charge_mode', 'ev_max_current_a', 'ev_min_current_a', 'ev_fixed_current_a', 'ev_target_import_w',
       'ev_peak1_start', 'ev_peak1_end', 'ev_peak2_start', 'ev_peak2_end',
       'ev_night_charge', 'ev_night_start', 'ev_night_end', 'ev_bat_night_min_soc',
       'ev_postpone_minutes',
       'ev_start_delay_ticks', 'ev_stop_delay_ticks',
       'ev_min_on_min', 'ev_min_off_min',
-      'tesla_scheduler_mode',
+      'tesla_scheduler_mode', 'ev_default_deadline',
     ];
 
     var DEVICE_BOOL_KEYS = ['hasBattery', 'hasEv', 'hasEvCharger', 'hasHeatPump', 'ev_night_charge'];
@@ -648,14 +648,18 @@
             <div class="field">
               <label>Bodem-SoC / altijd min. (%)</label>
               <input type="number" id="ev_floor_soc" value="20" min="5" max="60" />
-              <p class="hint">Panic-ondergrens: hieronder laadt het EMS direct, ongeacht de prijs.</p>
+              <p class="hint">Panic: hieronder direct laden, ongeacht prijs.</p>
             </div>
-            <div class="field"></div>
-          </div>
-          <div class="row2">
             <div class="field">
               <label>Capaciteit (kWh)</label>
               <input type="number" id="ev_capacity_kwh" value="75" min="10" max="200" />
+            </div>
+          </div>
+          <div class="row2">
+            <div class="field">
+              <label>Standaard klaar-tijd</label>
+              <input type="time" id="ev_default_deadline" value="07:00" />
+              <p class="hint">Doel bereikt vóór dit tijdstip (zonder override).</p>
             </div>
             <div class="field">
               <label>Standaard doel-SoC (%)</label>
@@ -685,11 +689,20 @@
               <b>"EMS Tesla-doel"</b>; zonder override geldt de <b>standaard doel-SoC</b> hierboven op de
               eerstvolgende 07:00. Harde ondergrens 20% (panic). Zon-instellingen zijn dan niet van toepassing.
             </p>
-            <label>Sturing</label>
-            <select id="tesla_scheduler_mode">
-              <option value="live">🟢 Live — stuurt de auto echt aan</option>
-              <option value="dryrun">🧪 Proef — rekent en logt, stuurt niets</option>
-            </select>
+            <div class="row2">
+              <div class="field">
+                <label>Opportunistisch plafond (%)</label>
+                <input type="number" id="ev_opportunistic_soc" value="85" min="50" max="100" />
+                <p class="hint">Zonder override: tot dit niveau in de allergoedkoopste week-uren.</p>
+              </div>
+              <div class="field">
+                <label>Sturing</label>
+                <select id="tesla_scheduler_mode">
+                  <option value="live">🟢 Live — stuurt de auto echt aan</option>
+                  <option value="dryrun">🧪 Proef — rekent en logt, stuurt niets</option>
+                </select>
+              </div>
+            </div>
           </div>
 
           <div class="row2">
