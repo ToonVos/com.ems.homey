@@ -197,22 +197,43 @@ class TeslaScheduler {
       decision = 'panic_charge';
       reason = `SoC ${soc}% ≤ vloer ${floor}% — laden ongeacht prijs`;
     } else {
-      // Laag 1 (verplicht): goedkoopste slots in [nu, deadline] tot standaard-doel.
-      const need1 = soc < mandatory ? Math.max(0, (mandatory - soc) / 100 * cap) / EFFICIENCY : 0;
-      const within = horizon.filter(h => h.t >= now - SLOT_MIN * 60_000 && h.t <= dlMs);
-      const sel1 = this._pickCheapest(within, need1, slotKwh, null);
-
-      // Laag 2 (opportunistisch): goedkoopste slots in de HELE horizon (excl. laag 1)
-      // om van doel → plafond te gaan; geen deadline → alleen écht goedkope uren.
-      const fromOpp = Math.max(soc, mandatory);
-      const need2 = soc < ceiling ? Math.max(0, (ceiling - fromOpp) / 100 * cap) / EFFICIENCY : 0;
+      // Batterijgezondheid: hoge SoC niet lang vasthouden op de NCA-pack.
+      const guard = this.homey.settings.get('ev_battery_health') ?? true;
+      const HOLD = 80, MID = 90, MIDWIN_MS = 6 * 3_600_000;   // 6u vóór deadline
+      const within  = horizon.filter(h => h.t >= now - SLOT_MIN * 60_000 && h.t <= dlMs);
       const fullWin = horizon.filter(h => h.t >= now - SLOT_MIN * 60_000);
-      const sel2 = this._pickCheapest(fullWin, need2, slotKwh, sel1.set);
 
-      kwhNeeded = need1 + need2;
-      selectedCount = sel1.count + sel2.count;
-      if (sel1.lastTs) readyByIso = new Date(sel1.lastTs + SLOT_MIN * 60_000).toISOString();
-      const unionLast = Math.max(sel1.lastTs || 0, sel2.lastTs || 0);
+      // kWh per SoC-band tot het (verplichte) doel
+      const bandKwh = (lo, hi) => {
+        const from = Math.max(soc, lo), to = Math.min(mandatory, hi);
+        return to > from ? (to - from) / 100 * cap / EFFICIENCY : 0;
+      };
+
+      // Verplichte vulling per band — venster afhankelijk van gezondheid-bewaking:
+      //   0–80%  : goedkoopste uren tot deadline
+      //   80–90% : alleen ≤6u vóór deadline (guard), anders overal tot deadline
+      //   90–100%: pas op het laatste moment vóór deadline (guard), anders goedkoopst
+      const mandSet = new Set();
+      const addAll = (st) => { st.set.forEach(t => mandSet.add(t)); };
+      addAll(this._pickCheapest(within, bandKwh(0, HOLD), slotKwh, mandSet));
+      const win8090 = guard ? within.filter(h => h.t >= dlMs - MIDWIN_MS) : within;
+      addAll(this._pickCheapest(win8090, bandKwh(HOLD, MID), slotKwh, mandSet));
+      addAll(guard
+        ? this._pickLatest(within,   bandKwh(MID, 100), slotKwh, mandSet)
+        : this._pickCheapest(within, bandKwh(MID, 100), slotKwh, mandSet));
+
+      // Opportunistisch tot plafond (hele horizon, excl. verplicht). Met guard niet
+      // boven 80% houden → opportunistisch plafond afgetopt op 80%.
+      const oppCap  = guard ? Math.min(ceiling, HOLD) : ceiling;
+      const fromOpp = Math.max(soc, mandatory);
+      const need2   = soc < oppCap ? Math.max(0, (oppCap - fromOpp) / 100 * cap) / EFFICIENCY : 0;
+      const oppSet  = this._pickCheapest(fullWin, need2, slotKwh, mandSet).set;
+
+      kwhNeeded = (soc < mandatory ? (mandatory - soc) / 100 * cap / EFFICIENCY : 0) + need2;
+      selectedCount = mandSet.size + oppSet.size;
+      const mandLast = mandSet.size ? Math.max(...mandSet) : 0;
+      if (mandLast) readyByIso = new Date(mandLast + SLOT_MIN * 60_000).toISOString();
+      const unionLast = Math.max(mandLast, oppSet.size ? Math.max(...oppSet) : 0);
       if (unionLast) ceilReadyIso = new Date(unionLast + SLOT_MIN * 60_000).toISOString();
 
       if (now > dlMs && soc < mandatory) {
@@ -225,13 +246,14 @@ class TeslaScheduler {
         decision = 'no_prices';
         reason = 'geen prijs-horizon — laden';
       } else {
-        const inMand = sel1.set.has(cur.t);
-        const inOpp  = sel2.set.has(cur.t);
+        const inMand = mandSet.has(cur.t);
+        const inOpp  = oppSet.has(cur.t);
         chargeNow = inMand || inOpp;
         tier = inMand ? 'verplicht' : (inOpp ? 'opportunistisch' : null);
         decision = chargeNow ? (inMand ? 'charge_mandatory' : 'charge_opportunistic') : 'wait_cheaper';
+        this._healthGuard = guard;
         reason = chargeNow
-          ? `${tier} laden (€${currentPrice?.toFixed(3) ?? '?'}) — ${selectedCount} slots voor ${kwhNeeded.toFixed(1)}kWh @ ${effRate.toFixed(1)}kW`
+          ? `${tier} laden (€${currentPrice?.toFixed(3) ?? '?'}) — ${selectedCount} slots${guard ? ', gezondheid-bewaakt' : ''} @ ${effRate.toFixed(1)}kW`
           : `nu €${currentPrice?.toFixed(3) ?? '?'} — wacht (doel ${mandatory}% ~${readyByIso ? this.app.localTime(new Date(readyByIso)) : '?'}, plafond ${ceiling}% ~${ceilReadyIso ? this.app.localTime(new Date(ceilReadyIso)) : '?'})`;
       }
     }
@@ -292,6 +314,7 @@ class TeslaScheduler {
       ts_local: this.app.localTime(),
       mode: live ? 'live' : 'dryrun',
       connected, soc, target_pct: mandatory, ceiling_pct: ceiling, tier,
+      health_guard: (this.homey.settings.get('ev_battery_health') ?? true),
       deadline_local: this.app.localTime(deadline),
       override_active: ov.active,
       decision, reason, charge_now: chargeNow,
@@ -335,6 +358,23 @@ class TeslaScheduler {
       set.add(s.t); acc += slotKwh; count++;
     }
     if (set.size) lastTs = Math.max(...set);   // laatste (chronologisch) gekozen slot
+    return { set, count, lastTs };
+  }
+
+  /** Laatste slots vóór de deadline (voor de 90–100%-band: 'pas op het laatste
+   *  moment laden'). Kiest chronologisch van achteren, ongeacht prijs. */
+  _pickLatest(slots, kwhNeeded, slotKwh, excludeSet) {
+    const set = new Set();
+    let count = 0, acc = 0, lastTs = null;
+    if (kwhNeeded <= 0 || slotKwh <= 0) return { set, count, lastTs };
+    const sorted = slots
+      .filter(s => !excludeSet || !excludeSet.has(s.t))
+      .sort((a, b) => b.t - a.t);              // nieuwste (dichtst bij deadline) eerst
+    for (const s of sorted) {
+      if (acc >= kwhNeeded) break;
+      set.add(s.t); acc += slotKwh; count++;
+    }
+    if (set.size) lastTs = Math.max(...set);
     return { set, count, lastTs };
   }
 

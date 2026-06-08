@@ -59,6 +59,7 @@
           Homey.get('phases'),
           Homey.get('ev_charge_mode'),
           Homey.get('ev_night_charge'),
+          Homey.get('ev_battery_health'),
         ]);
       }).then(function(vals) {
         toggleDynamic(vals[0] || 'fixed');
@@ -68,6 +69,8 @@
           var cb = document.getElementById('ev_night_charge');
           if (cb) cb.checked = !!vals[3];
         }
+        var hb = document.getElementById('ev_battery_health');
+        if (hb) hb.checked = vals[4] == null ? true : !!vals[4];   // default aan
         showNightSection();
         updatePvTotal();
       }).catch(function(err) {
@@ -243,7 +246,7 @@
             }
             saveDeviceSettings();
           } else {
-            if (el.id.indexOf('ev_home_') === 0) {
+            if (el.id.indexOf('ev_home_') === 0 || el.id === 'ev_battery_health') {
               _Homey.set(el.id, el.checked).then(showSaved).catch(function(e) {
                 console.error('[EMS settings] save error:', el.id, e);
               });
@@ -688,6 +691,11 @@
               <p class="hint">Tot dit niveau in de allergoedkoopste week-uren.</p>
             </div>
           </div>
+          <div class="toggle-row" style="margin-top:6px">
+            <input type="checkbox" id="ev_battery_health" />
+            <label for="ev_battery_health">Batterijgezondheid bewaken</label>
+          </div>
+          <p class="hint">Houdt de accu langer goed door hoge SoC niet lang vast te houden: tot 80% wordt in de goedkoopste uren geladen; <b>80–90%</b> pas in goedkope uren ≤6&nbsp;uur vóór de klaar-tijd; de <b>laatste 10% (90–100%)</b> pas op het laatste moment vóór de klaar-tijd. Opportunistisch laden stopt dan bij 80%. Uit = altijd puur de goedkoopste uren.</p>
 
           <!-- Laadstrategie -->
           <h3>Laadstrategie</h3>
