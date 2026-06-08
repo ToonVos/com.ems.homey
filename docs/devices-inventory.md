@@ -28,3 +28,49 @@ Koppeltabel: welke Homey-device + capability levert welke EMS-input. Uitgelezen 
 - **Module 3 (all-in prijs):** `Stroomprijzen` levert mogelijk al all-in prijzen (`meter_price_h0` ≈ €0,224 incl. belasting) + aparte `_export`. Verifiëren of PbtH-markup correct staat → mogelijk verkleint dit module 3 tot "lees PbtH all-in" i.p.v. zelf rekenen.
 - **Live grid/PV:** gebruik de **rauwe** devices (`measure_power`), niet de `Σ`-counters (die geven `measure_watt_avg`, te traag voor zero-export sturing).
 - **Nexus:** alleen lezen. `control_mode=dynamic_charging`, `total_earned` = Powerplay-opbrengst (lifetime €2417 op 2026-06-08).
+
+## Aansturing (flow-cards) — uitgelezen 2026-06-08
+
+Flow-cards zijn device-scoped (`homey:device:<id>:<card>`). Een Homey-app kan ze
+aanroepen via de Flow-API of (waar settable) via capabilities.
+
+### Tesla S batterij — ACTIES (laadsturing, géén Wall Connector nodig)
+- **Laadversterkers instellen** («current») → laadstroom A — kern voor zero-export modulatie
+- **Stel Laadlimiet SoC in** («limit») → laadlimiet %
+- **Start/stop het opladen** («action»)
+- **Laadvermogenmeter instellen** («power»)
+- **Stel gepland opladen in** («action,hh,mm»)
+- **Gepland vertrek instellen** («action,preconditioning_enabled,preconditioning_weekdays_only,off_peak_charging_enabled,off_peak_charging_weekdays_only,hh,mm,op_hh,op_mm»)
+- Schakel gepland laden uit · Deactiveer gepland vertrek · Laadpoort open/dicht · Ontgrendel laadpoort
+
+### Tesla S batterij — TRIGGERS (relevant)
+Laden begonnen/gestopt · Laadstroom gewijzigd · Max. laadstroom gewijzigd · Laadlimiet SoC gewijzigd · Laad vermogen (AC/DC) · **Modultemperatuur min/max (°C)** (→ <0°C Li-plating-regel) · Oplaadstatus gewijzigd · Online/Offline voor de duur · Batterijniveau (bruikbaar)
+
+### Tesla S batterij — CONDITIES
+Oplaadstatus is «state» · Laadpoort is open · Batterijverwarmer is aan
+
+### Tesla S (auto) — ACTIES
+Stel online-interval in («interval,unit») · Maak het voertuig wakker («wait») · Sentry Mode («action») · Lees de API-kosten · Bijgewerkte voertuiggegevens (refresh) · Ping de auto
+
+### Tesla S (auto) — TRIGGERS (relevant)
+Toestand gewijzigd · Online/Offline voor de duur («duration,unit») · Er is een API-fout opgetreden · API-fout opgetreden voor de duur · Tesla API aanvragen/commando's/wek-commando's/kosten wordt meer/minder dan (+ voor-de-duur) · Accuniveau · Schakelstand gewijzigd · Gebruiker aan-/afwezig
+
+### Tesla S (auto) — CONDITIES
+API-fout is/is niet opgetreden · Dagelijkse gemiddelde API-kosten (in %) hoger dan «value» · Toestand is «state» · Schakelstand is «state» · Gebruiker is aanwezig
+
+### Nexus (Zonneplan Batterij) — ACTIES ⚠️ BESTAAN, maar NIET gebruiken (P2)
+Thuisgebruik activeren · Powerplay activeren · Thuis optimalisatie activeren («mode») · Home optimization advanced: Charge («charge,discharge»)
+> Aansturen = uit vrije handel = verlies onbalans-opbrengst. Alleen lezen.
+
+### Nexus — TRIGGERS (lezen)
+Vermogen (W) · Accuniveau (%) · Totaal/dagelijkse import/export (kWh) · Vandaag/Totaal/deze-maand/vorige-maand verdiend (€) · Oplaadstatus veranderd · Batterij online/offline · Dynamische load balancing geactiveerd/gedeactiveerd (+ alle voor-de-duur varianten)
+
+### Nexus — CONDITIES
+De oplaadstatus van de batterij is «state»
+
+## Conclusies voor de modules
+
+- **Module 2 (Tesla-control) is native compleet:** Laadversterkers instellen (amps) + Laadlimiet SoC + Start/stop + Gepland vertrek met voorconditionering — allemaal op Tesla S batterij, zonder Wall Connector. Implementatie: onze logica roept deze flow-acties aan (Flow-API) i.p.v. Menno's Wall-Connector-pad.
+- **Command-budget (FX1):** triggers + condities op Tesla S (API-fout, API-kosten/aanvragen/commando's-drempels) + actie "Stel online-interval in" (FX2) + "Maak wakker (wait)". v5.3-aannames bevestigd.
+- **<0°C-regel:** trigger "Modultemperatuur min/max" of capability `module_temp`.
+- **Nexus:** stuur-acties bestaan maar blijven ongebruikt (P2); we lezen vermogen/SoC/verdiensten.
