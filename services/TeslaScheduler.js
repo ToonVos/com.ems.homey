@@ -77,7 +77,7 @@ class TeslaScheduler {
     const maxA   = this.homey.settings.get('ev_max_current_a') ?? cfg.maxAmps ?? 16;
     const phases = this.homey.settings.get('ev_phases') ?? cfg.phases ?? 3;
     const cap    = this.homey.settings.get('ev_capacity_kwh') ?? cfg.capacityKwh ?? 75;
-    const floor  = 20;  // EmsApp.FLOOR_PCT — PANIC-vloer
+    const floor  = this.homey.settings.get('ev_floor_soc') ?? 20;  // PANIC-vloer (instelbaar)
     const powerKw = (maxA * phases * VOLTAGE) / 1000;
     return { maxA, phases, cap, floor, powerKw };
   }

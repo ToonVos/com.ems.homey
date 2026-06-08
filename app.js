@@ -63,8 +63,13 @@ class EmsApp extends Homey.App {
   // vloer (panic), geen keuze. Opslag in settings; PlanningEngine leest dit.
 
   static AUTO_TARGET_PCT   = 60;
-  static FLOOR_PCT         = 20;
+  static FLOOR_PCT         = 20;   // fallback-default; instelbaar via ev_floor_soc
   static MAX_HORIZON_HOURS = 168;
+
+  /** Bodem-SoC (panic-vloer) uit instellingen, of de fallback (20%). */
+  _floorPct() {
+    return this.homey.settings.get('ev_floor_soc') ?? EmsApp.FLOOR_PCT;
+  }
 
   // Tijdzone-rekenkunde — runtime-TZ-onafhankelijk via Intl.formatToParts
   // (geen Date-string-parsing zonder offset; voorkomt de 2u-fout bij zomertijd).
@@ -134,7 +139,7 @@ class EmsApp extends Homey.App {
       deadline_iso:    active ? deadline : defDeadline,
       auto_target_pct: autoTarget,
       auto_deadline:   defDeadline,
-      floor_pct:       EmsApp.FLOOR_PCT,
+      floor_pct:       this._floorPct(),
       max_horizon_h:   EmsApp.MAX_HORIZON_HOURS,
       tesla_soc:       soc,
       tz:              this.homey.clock.getTimezone(),
@@ -145,9 +150,10 @@ class EmsApp extends Homey.App {
 
   /** Zet een override (target% + deadline). Valideert en triggert herberekening. */
   async setTeslaOverride({ target_pct, deadline_iso }) {
+    const floor = this._floorPct();
     const pct = Math.round(Number(target_pct));
-    if (!Number.isFinite(pct) || pct < EmsApp.FLOOR_PCT || pct > 100) {
-      throw new Error(`Ongeldig doel-% (${target_pct}); moet ${EmsApp.FLOOR_PCT}–100 zijn`);
+    if (!Number.isFinite(pct) || pct < floor || pct > 100) {
+      throw new Error(`Ongeldig doel-% (${target_pct}); moet ${floor}–100 zijn`);
     }
     const dl = new Date(deadline_iso);
     if (isNaN(dl.getTime())) throw new Error(`Ongeldige deadline: ${deadline_iso}`);
