@@ -235,6 +235,15 @@ class EmsApp extends Homey.App {
     this.pricePredictor = new PricePredictor(this);
     await this.pricePredictor.init();
 
+    // Dynamisch contract en de 7-daagse voorspeller horen bij elkaar: zodra het
+    // contract op 'dynamisch' wordt gezet, meteen de voorspeller activeren.
+    this.homey.settings.on('set', (key) => {
+      if (key === 'contract_type') {
+        this.log(`[EMS] contract_type → ${this.homey.settings.get('contract_type')}`);
+        this.pricePredictor?.refreshNow?.();
+      }
+    });
+
     // Fork-module 7: beslis-/snapshot-log voor terugwerkende analyse (read-only).
     this.decisionLog = new DecisionLog(this);
     await this.decisionLog.init();

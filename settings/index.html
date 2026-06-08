@@ -345,6 +345,18 @@
       var isDyn = type === 'dynamic';
       document.getElementById('fixed-fields').style.display   = isDyn ? 'none'  : 'block';
       document.getElementById('dynamic-fields').style.display = isDyn ? 'block' : 'none';
+      // Prijs-laadmodus hoort bij een dynamisch contract (7-daagse voorspeller).
+      // Bij vast tarief verbergen we de optie; stond hij aan, val terug op 'uit'.
+      var modeSel = document.getElementById('ev_charge_mode');
+      if (modeSel) {
+        var priceOpt = modeSel.querySelector('option[value="price"]');
+        if (priceOpt) { priceOpt.hidden = !isDyn; priceOpt.disabled = !isDyn; }
+        if (!isDyn && modeSel.value === 'price') {
+          modeSel.value = 'off';
+          if (_Homey) _Homey.set('ev_charge_mode', 'off').then(showSaved).catch(function(){});
+          toggleEvFixed('off');
+        }
+      }
     }
 
     function togglePvPhases(phases) {

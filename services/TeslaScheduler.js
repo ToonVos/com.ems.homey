@@ -128,12 +128,18 @@ class TeslaScheduler {
     // Alleen actief in laadmodus 'price' — anders beheert Menno's EvController
     // (zon/vast/uit) de auto en doen wij niets (geen dubbele sturing).
     const chargeMode = this.homey.settings.get('ev_charge_mode') || 'solar_only';
-    if (chargeMode !== 'price') {
+    const contract   = this.homey.settings.get('contract_type') || 'fixed';
+    // Prijs-scheduler vereist laadmodus 'price' ÉN een dynamisch contract
+    // (bij vast tarief bestaat 'goedkoopste uur' niet).
+    if (chargeMode !== 'price' || contract !== 'dynamic') {
       this._lastChargingCmd = null;
       this._pending = null;
+      const why = chargeMode !== 'price'
+        ? `laadmodus '${chargeMode}'`
+        : 'vast tarief (geen uurprijzen)';
       this._last = {
-        decision: 'mode_not_price', mode: this._mode(), charge_now: false,
-        reason: `laadmodus '${chargeMode}' — prijs-scheduler inactief`,
+        decision: 'inactive', mode: this._mode(), charge_now: false,
+        reason: `${why} — prijs-scheduler inactief`,
       };
       return;
     }

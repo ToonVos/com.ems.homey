@@ -86,7 +86,19 @@ class PricePredictor {
     catch (err) { this.app.error('[PricePredictor] refresh-fout:', err.message); }
   }
 
+  /** Forceer een verse ophaalslag (bv. nadat contract op dynamisch is gezet). */
+  async refreshNow() {
+    this._fetchedAt = 0;
+    await this._refreshSafe();
+  }
+
   async _refresh() {
+    // De 7-daagse voorspeller hoort bij een dynamisch contract. Bij vast tarief
+    // bestaat 'goedkoopste uur' niet → niet ophalen (bespaart API-calls).
+    if ((this.homey.settings.get('contract_type') || 'fixed') !== 'dynamic') {
+      if (this._horizon.length) { this._horizon = []; this._fetchedAt = 0; }
+      return;
+    }
     if (this._horizon.length && (Date.now() - this._fetchedAt) < CACHE_TTL_MS) return;
 
     const res = await fetch(URL, { signal: AbortSignal.timeout(15000) });
