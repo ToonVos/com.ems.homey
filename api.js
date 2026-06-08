@@ -180,7 +180,7 @@ module.exports = {
         targetA:         ctrl?._currentTargetA ?? 0,
         lastCommandAgo:  ev ? Math.round((Date.now() - ev._lastCommandTime) / 1000) + 's geleden' : 'n/a',
         inPeakHour:      ctrl?.isPeakHour() ?? false,
-        postponedUntil:  ev ? (Date.now() < ctrl._evPostponedUntil ? new Date(ctrl._evPostponedUntil).toLocaleTimeString('nl-NL') : 'niet uitgesteld') : 'n/a',
+        postponedUntil:  ctrl ? (Date.now() < ctrl._evPostponedUntil ? new Date(ctrl._evPostponedUntil).toLocaleTimeString('nl-NL') : 'niet uitgesteld') : 'n/a',
         verdict: ctrl?.isPeakHour()
           ? `🚫 Piekblok actief — EV geblokkeerd tot ${ctrl._peak2End ?? 21}:00`
           : surplus >= minPowerW
