@@ -6,6 +6,7 @@ const EmsManager                   = require('./managers/EmsManager');
 const FlowManager                  = require('./managers/FlowManager');
 const NotificationManager          = require('./managers/NotificationManager');
 const DecisionLog                  = require('./services/DecisionLog');
+const ChargeDryRun                 = require('./services/ChargeDryRun');
 
 class EmsApp extends Homey.App {
 
@@ -77,11 +78,16 @@ class EmsApp extends Homey.App {
     this.decisionLog = new DecisionLog(this);
     await this.decisionLog.init();
 
+    // Fork-module 2 (dry-run): berekent gewenste laadstroom, stuurt NIETS.
+    this.chargeDryRun = new ChargeDryRun(this);
+    await this.chargeDryRun.init();
+
     this.log('  Home EMS ready.');
     this.log('═══════════════════════════════════');
   }
 
   async onUninit() {
+    if (this.chargeDryRun) this.chargeDryRun.destroy();
     if (this.decisionLog) this.decisionLog.destroy();
     if (this.ems) await this.ems.destroy();
     this.log('Home EMS stopped.');
@@ -118,6 +124,12 @@ class EmsApp extends Homey.App {
       case 'getDecisionLog': {
         const limit = args?.limit ?? 200;
         return this.decisionLog ? this.decisionLog.getRecent(limit) : [];
+      }
+
+      // Fork-module 2 (dry-run) — verwachting-vs-werkelijkheid ophalen
+      case 'getChargeDryRun': {
+        const limit = args?.limit ?? 200;
+        return this.chargeDryRun ? this.chargeDryRun.getRecent(limit) : [];
       }
 
       // Dashboard — get today's plan
