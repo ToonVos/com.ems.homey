@@ -7,6 +7,7 @@ const FlowManager                  = require('./managers/FlowManager');
 const NotificationManager          = require('./managers/NotificationManager');
 const DecisionLog                  = require('./services/DecisionLog');
 const ChargeDryRun                 = require('./services/ChargeDryRun');
+const PricePredictor               = require('./services/PricePredictor');
 
 class EmsApp extends Homey.App {
 
@@ -74,6 +75,11 @@ class EmsApp extends Homey.App {
     await this.ems.init();
     await this.flows.init();
 
+    // Meerdaagse prijs-pipeline (EpexPredictor, read-only). Vóór DecisionLog
+    // zodat de log de prijs-samenvatting kan meenemen.
+    this.pricePredictor = new PricePredictor(this);
+    await this.pricePredictor.init();
+
     // Fork-module 7: beslis-/snapshot-log voor terugwerkende analyse (read-only).
     this.decisionLog = new DecisionLog(this);
     await this.decisionLog.init();
@@ -89,6 +95,7 @@ class EmsApp extends Homey.App {
   async onUninit() {
     if (this.chargeDryRun) this.chargeDryRun.destroy();
     if (this.decisionLog) this.decisionLog.destroy();
+    if (this.pricePredictor) this.pricePredictor.destroy();
     if (this.ems) await this.ems.destroy();
     this.log('Home EMS stopped.');
   }
@@ -130,6 +137,12 @@ class EmsApp extends Homey.App {
       case 'getChargeDryRun': {
         const limit = args?.limit ?? 200;
         return this.chargeDryRun ? this.chargeDryRun.getRecent(limit) : [];
+      }
+
+      // Meerdaagse prijs-pipeline — horizon of samenvatting ophalen
+      case 'getPriceHorizon': {
+        if (!this.pricePredictor) return null;
+        return args?.summary ? this.pricePredictor.getSummary() : this.pricePredictor.getHorizon();
       }
 
       // Dashboard — get today's plan

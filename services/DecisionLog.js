@@ -126,6 +126,7 @@ class DecisionLog {
       nexus:     { power_w: n_power, soc: n_soc, charging_state: n_state, control_mode: n_mode, total_earned_eur: n_earned_total, daily_earned_eur: n_earned_day, cycle_count: n_cycles },
       prices:    { h0: pr_h0, h0_export: pr_h0_exp, h1: pr_h1, h2: pr_h2, h3: pr_h3, day_lowest: pr_low_day, day_highest: pr_high_day, rank_h0: pr_rank, next_day_lowest: pr_next_low, next_day_highest: pr_next_high },
       forecast:  { now_w: f_now, kwh_today: f_kwh_day, kwh_tomorrow: f_kwh_tom, tomorrow_peak_w: f_tom_peak },
+      price_horizon: this.app.pricePredictor ? this.app.pricePredictor.getSummary() : null,
       // 'decision' en 'outcome' worden later aangevuld door de engine resp. na-meting.
       decision:  null,
       outcome:   null,
