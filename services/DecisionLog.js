@@ -134,6 +134,14 @@ class DecisionLog {
     this._ring.push(rec);
     if (this._ring.length > RING_MAX) this._ring.shift();
     this._appendJsonl(rec);
+
+    this.app.log(
+      `[DecisionLog] snapshot #${this._ring.length}` +
+      ` | P1 ${rec.p1.power_w}W | PV ${rec.pv.power_w}W` +
+      ` | Tesla ${rec.tesla.soc}% (${rec.tesla.charging_state})` +
+      ` | Nexus ${rec.nexus.soc}% ${rec.nexus.power_w}W` +
+      ` | prijs €${rec.prices.h0}`
+    );
   }
 
   _appendJsonl(rec) {
