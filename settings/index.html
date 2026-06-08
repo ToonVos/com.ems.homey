@@ -629,8 +629,16 @@
         <div class="indent">
 
           <!-- Apparaat -->
-          <label>EV apparaat (Tesla of andere)</label>
-          <select id="evDeviceId"><option value="">— Geen —</option></select>
+          <div class="row2">
+            <div class="field">
+              <label>EV apparaat (Tesla of andere)</label>
+              <select id="evDeviceId"><option value="">— Geen —</option></select>
+            </div>
+            <div class="field">
+              <label>Capaciteit (kWh)</label>
+              <input type="number" id="ev_capacity_kwh" value="75" min="10" max="200" />
+            </div>
+          </div>
           <label style="margin-top:2px">Wall Connector IP <span style="font-weight:400;font-size:11px">(optioneel — voor lokale meting)</span></label>
           <input type="text" id="wallConnectorIp" placeholder="bijv. 192.168.1.50" style="font-family:monospace;margin-bottom:6px" />
           <div class="sub-toggle">
@@ -646,34 +654,27 @@
           <h3>Batterij &amp; doel</h3>
           <div class="row2">
             <div class="field">
-              <label>Bodem-SoC / altijd min. (%)</label>
-              <input type="number" id="ev_floor_soc" value="20" min="5" max="60" />
-              <p class="hint">Panic: hieronder direct laden, ongeacht prijs.</p>
+              <label>Standaard klaar-tijd</label>
+              <input type="time" id="ev_default_deadline" value="07:00" />
+              <p class="hint">Standaard-doel bereikt vóór dit tijdstip (zonder override).</p>
             </div>
-            <div class="field">
-              <label>Capaciteit (kWh)</label>
-              <input type="number" id="ev_capacity_kwh" value="75" min="10" max="200" />
-            </div>
-          </div>
-          <div class="row2">
             <div class="field">
               <label>Standaard doel-SoC (%)</label>
               <input type="number" id="ev_default_soc" value="70" min="20" max="100" />
               <p class="hint">Geldt zonder dashboard-override.</p>
+            </div>
+          </div>
+          <div class="row2">
+            <div class="field">
+              <label>Bodem-SoC / altijd min. (%)</label>
+              <input type="number" id="ev_floor_soc" value="20" min="5" max="60" />
+              <p class="hint">Panic: hieronder direct laden, ongeacht prijs.</p>
             </div>
             <div class="field">
               <label>Opportunistisch plafond (%)</label>
               <input type="number" id="ev_opportunistic_soc" value="85" min="50" max="100" />
               <p class="hint">Tot dit niveau in de allergoedkoopste week-uren.</p>
             </div>
-          </div>
-          <div class="row2">
-            <div class="field">
-              <label>Standaard klaar-tijd</label>
-              <input type="time" id="ev_default_deadline" value="07:00" />
-              <p class="hint">Standaard-doel bereikt vóór dit tijdstip (zonder override).</p>
-            </div>
-            <div class="field"></div>
           </div>
 
           <!-- Laadstrategie -->
