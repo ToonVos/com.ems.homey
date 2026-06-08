@@ -332,8 +332,11 @@ class TeslaScheduler {
         if (live) {
           // Laadlimiet = plafond zodat de auto tot het plafond kan; de scheduler
           // stopt zelf eerder zodra het doel is gehaald of de uren op zijn.
-          await this._drive(tesla, wantCharge, maxA, ceiling);
-          this._pending = { want: wantCharge, at: Date.now(), retries: 0 };  // verifieer over 3 min
+          const ok = await this._drive(tesla, wantCharge, maxA, ceiling);
+          // Alleen verifiëren als het commando écht verstuurd is — anders geen
+          // zinloze wake-pogingen (bv. bij ontbrekende rechten of netwerkfout).
+          if (ok) this._pending = { want: wantCharge, at: Date.now(), retries: 0 };
+          else    commanded = null;
         }
         this._lastChargingCmd = wantCharge;
         this._bumpCmd();
@@ -477,25 +480,29 @@ class TeslaScheduler {
   async _drive(_tesla, wantCharge, maxA, targetPct) {
     const dev = this._teslaBatId();
     try {
+      // Hoofdsturing: start/stop via de settable capability `charging_on`
+      // (betrouwbaar — flow-acties botsten op "Missing Scopes").
+      await this.app.setDeviceCapability(dev, 'charging_on', !!wantCharge);
+
+      // Laadlimiet + amps zijn best-effort via de flow-acties: mogen falen zonder
+      // de hoofdsturing (start/stop) te blokkeren. Alleen bij (her)wijziging.
       if (wantCharge) {
-        // Laadlimiet alleen (her)zetten als die wijzigt — bespaart commando's.
         const limit = Math.max(50, Math.min(100, Math.round(targetPct)));
-        if (this._lastLimit !== limit) {
-          await this.app.runDeviceAction(dev, 'charge_limit', { limit });
-          this._lastLimit = limit;
-        }
+        if (this._lastLimit !== limit) { if (await this._tryAction(dev, 'charge_limit', { limit })) this._lastLimit = limit; }
         const amps = Math.max(1, Math.min(32, Math.round(maxA)));
-        if (this._lastAmps !== amps) {
-          await this.app.runDeviceAction(dev, 'charge_current', { current: amps });
-          this._lastAmps = amps;
-        }
-        await this.app.runDeviceAction(dev, 'charging_on', { action: 'start' });
-      } else {
-        await this.app.runDeviceAction(dev, 'charging_on', { action: 'stop' });
+        if (this._lastAmps !== amps) { if (await this._tryAction(dev, 'charge_current', { current: amps })) this._lastAmps = amps; }
       }
+      return true;
     } catch (err) {
-      this.app.error('[TeslaSched] sturing-fout:', err.message);
+      this.app.error('[TeslaSched] sturing-fout:', err?.message || String(err));
+      return false;
     }
+  }
+
+  /** Best-effort flow-actie; faalt stil (logt) zonder de hoofdsturing te raken. */
+  async _tryAction(dev, card, args) {
+    try { await this.app.runDeviceAction(dev, card, args); return true; }
+    catch (e) { this.app.log(`[TeslaSched] ${card} niet gezet (${e?.message || e})`); return false; }
   }
 
   _bumpCmd() {

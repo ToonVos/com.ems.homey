@@ -56,6 +56,13 @@ class EmsApp extends Homey.App {
     return this._homeyApi.flow.runFlowCardAction({ id, args });
   }
 
+  // Zet een settable capability op een device van een andere app (bv. Tesla S
+  // batterij `charging_on`). Betrouwbaarder dan flow-acties voor start/stop.
+  async setDeviceCapability(deviceId, capabilityId, value) {
+    const dev = await this.getDevice(deviceId);
+    return dev.setCapabilityValue(capabilityId, value);
+  }
+
   // ─── Tesla laaddoel-override (dashboard-widget ems-control) ────────────────
   // Pre-saldering geldt: enige knop = wanneer kopen. Default = 60% gegarandeerd
   // op eerstvolgende 07:00; gebruiker kan dit overschrijven met een hoger %
