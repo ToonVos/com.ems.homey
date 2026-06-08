@@ -83,6 +83,44 @@ class TeslaScheduler {
     return { maxA, phases, cap, floor, powerKw };
   }
 
+  /** Device-id van het PbtH Stroomprijzen-device (actuele uurprijzen). */
+  _pricesId() {
+    const d = this.homey.settings.get('decisionlog_devices') || {};
+    return d.prices || 'cc19fcf6-8f6f-4174-8f9b-6163b630f360';
+  }
+
+  /** EpexPredictor-horizon (15-min, all-in) met PbtH-overlay: de eerstvolgende
+   *  8 uur krijgen de échte beursprijzen (meter_price_h0..h7) i.p.v. forecast. */
+  async _blendedHorizon() {
+    const base = (this.app.pricePredictor?.getHorizon() || [])
+      .map(h => ({ ...h, t: new Date(h.ts).getTime() }));
+    this._lastOverlay = 0;
+    if (!base.length) return base;
+    let pbth = null;
+    try {
+      const dev  = await this.app.getDevice(this._pricesId());
+      const caps = dev?.capabilitiesObj || {};
+      pbth = [];
+      for (let i = 0; i < 8; i++) {
+        const v = caps[`meter_price_h${i}`]?.value;
+        pbth.push(v == null ? null : v);
+      }
+    } catch (_) { pbth = null; }
+    if (!pbth || pbth.every(v => v == null)) return base;
+
+    const HOUR = 3_600_000;
+    const nowHourStart = Math.floor(Date.now() / HOUR) * HOUR;
+    for (const s of base) {
+      const off = Math.round((Math.floor(s.t / HOUR) * HOUR - nowHourStart) / HOUR);
+      if (off >= 0 && off < 8 && pbth[off] != null) {
+        s.import_eur = pbth[off];   // echte all-in uurprijs
+        s.actual = true;
+        this._lastOverlay++;
+      }
+    }
+    return base;
+  }
+
   /** Device-id van de Tesla-batterij (waar de laad-flow-acties op zitten). */
   _teslaBatId() {
     const d = this.homey.settings.get('decisionlog_devices') || {};
@@ -174,10 +212,9 @@ class TeslaScheduler {
       if ((Date.now() - lastOpp) >= WEEK_MS) this.homey.settings.set('tesla_opp_last_ts', Date.now());
     }
 
-    // 3. Horizon
-    const horizon = (this.app.pricePredictor?.getHorizon() || [])
-      .map(h => ({ ...h, t: new Date(h.ts).getTime() }))
-      .sort((a, b) => a.t - b.t);
+    // 3. Horizon — EpexPredictor-forecast met PbtH-overlay (echte beursprijzen
+    //    voor de eerstvolgende 8 uur) er overheen.
+    const horizon = (await this._blendedHorizon()).sort((a, b) => a.t - b.t);
     const now  = Date.now();
     const dlMs = deadline.getTime();
     const cur  = horizon.find(h => now >= h.t && now < h.t + SLOT_MIN * 60_000);
@@ -333,6 +370,7 @@ class TeslaScheduler {
       power_kw: +powerKw.toFixed(2),
       eff_rate_kw: +effRate.toFixed(2),
       selected_slots: selectedCount,
+      actual_overlay_slots: this._lastOverlay ?? 0,
       current_price_eur: currentPrice,
       ready_by_local: readyByIso ? this.app.localTime(new Date(readyByIso)) : null,
       ceil_ready_local: ceilReadyIso ? this.app.localTime(new Date(ceilReadyIso)) : null,
