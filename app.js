@@ -5,6 +5,7 @@ const { HomeyAPIV3Local }          = require('homey-api');
 const EmsManager                   = require('./managers/EmsManager');
 const FlowManager                  = require('./managers/FlowManager');
 const NotificationManager          = require('./managers/NotificationManager');
+const DecisionLog                  = require('./services/DecisionLog');
 
 class EmsApp extends Homey.App {
 
@@ -72,11 +73,16 @@ class EmsApp extends Homey.App {
     await this.ems.init();
     await this.flows.init();
 
+    // Fork-module 7: beslis-/snapshot-log voor terugwerkende analyse (read-only).
+    this.decisionLog = new DecisionLog(this);
+    await this.decisionLog.init();
+
     this.log('  Home EMS ready.');
     this.log('═══════════════════════════════════');
   }
 
   async onUninit() {
+    if (this.decisionLog) this.decisionLog.destroy();
     if (this.ems) await this.ems.destroy();
     this.log('Home EMS stopped.');
   }
@@ -106,6 +112,12 @@ class EmsApp extends Homey.App {
       // Dashboard — get current EMS state
       case 'getState': {
         return this.ems.getPublicState();
+      }
+
+      // Fork-module 7 — beslis-log ophalen (voor inspectie / NAS-export)
+      case 'getDecisionLog': {
+        const limit = args?.limit ?? 200;
+        return this.decisionLog ? this.decisionLog.getRecent(limit) : [];
       }
 
       // Dashboard — get today's plan
