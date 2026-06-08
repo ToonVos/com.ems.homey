@@ -37,6 +37,8 @@ const SLOT_MIN     = 15;               // PricePredictor-resolutie
 const SLOT_H       = SLOT_MIN / 60;
 const VOLTAGE      = 230;
 const EFFICIENCY   = 0.91;             // on-board charger @ vol vermogen (~16A)
+const VERIFY_MS    = 3 * 60 * 1000;    // 3 min na commando: laadt/stopt hij echt?
+const MAX_WAKE_RETRIES = 2;            // max keer wakker maken + opnieuw sturen
 
 class TeslaScheduler {
 
@@ -84,6 +86,34 @@ class TeslaScheduler {
   _teslaBatId() {
     const d = this.homey.settings.get('decisionlog_devices') || {};
     return d.teslaBat || 'd2ffa0cf-3b76-4185-9185-aee51364ce27';
+  }
+
+  /** Device-id van de Tesla-auto (waar car_wake_up op zit). */
+  _teslaCarId() {
+    const d = this.homey.settings.get('decisionlog_devices') || {};
+    return d.tesla || '37cdaf85-28d4-41ca-95fb-7591764aa597';
+  }
+
+  /** Leest RECHTSTREEKS of de auto laadt (vers, omzeilt adapter-cache). null=onbekend. */
+  async _readActualCharging() {
+    try {
+      const dev = await this.app.getDevice(this._teslaBatId());
+      const c = dev?.capabilitiesObj || {};
+      const power = c.measure_charge_power?.value;
+      if (power != null) return power > 0.1;                 // kW
+      const stateC = c.charging_state?.value;
+      if (stateC != null) return String(stateC).toLowerCase() === 'charging';
+      return null;
+    } catch (_) { return null; }
+  }
+
+  /** Maakt de auto wakker en stuurt het gewenste commando opnieuw. */
+  async _wakeAndRetry(want, maxA, targetPct) {
+    try {
+      await this.app.runDeviceAction(this._teslaCarId(), 'car_wake_up', { wait: 'wait' });
+    } catch (e) { this.app.error('[TeslaSched] wake-fout:', e.message); }
+    this._lastAmps = null; this._lastLimit = null;          // forceer her-sturing
+    await this._drive(null, want, maxA, targetPct);
   }
 
   async _tickSafe() {
@@ -188,14 +218,45 @@ class TeslaScheduler {
       const wantCharge = chargeNow;
       if (this._lastChargingCmd !== wantCharge) {
         commanded = wantCharge ? 'start' : 'stop';
-        if (live) await this._drive(tesla, wantCharge, maxA, targetPct);
+        if (live) {
+          await this._drive(tesla, wantCharge, maxA, targetPct);
+          this._pending = { want: wantCharge, at: Date.now(), retries: 0 };  // verifieer over 3 min
+        }
         this._lastChargingCmd = wantCharge;
         this._bumpCmd();
       } else {
-        // ongewijzigd → niets sturen (idle-skip), TeslaEvAdapter heeft eigen cooldown
+        // ongewijzigd → niets sturen (idle-skip)
       }
     } else {
       this._lastChargingCmd = null;  // reset bij niet-verbonden / op doel
+      this._pending = null;
+    }
+
+    // 4b. Verificatie-lus: 3 min na een commando checken of de auto echt
+    // laadt/gestopt is; zo niet → wakker maken + opnieuw sturen (max 2×).
+    let verify = null;
+    if (live && this._pending && connected && (Date.now() - this._pending.at) >= VERIFY_MS) {
+      const actual = await this._readActualCharging();
+      if (actual === null) {
+        verify = 'onbekend';                                  // geen meting → volgende cyclus opnieuw
+        this._pending.at = Date.now();
+      } else if (actual === this._pending.want) {
+        verify = 'ok';
+        this.app.log(`[TeslaSched] geverifieerd: auto ${actual ? 'laadt' : 'laadt niet'} zoals gewenst`);
+        this._pending = null;
+      } else if (this._pending.retries < MAX_WAKE_RETRIES) {
+        this._pending.retries++;
+        verify = `mismatch→wake#${this._pending.retries}`;
+        this.app.log(`[TeslaSched] mismatch (wil ${this._pending.want ? 'laden' : 'stoppen'}, auto ${actual ? 'laadt' : 'laadt niet'}) — wakker maken + opnieuw (#${this._pending.retries})`);
+        await this._wakeAndRetry(this._pending.want, maxA, targetPct);
+        this._pending.at = Date.now();
+        this._bumpCmd();
+      } else {
+        verify = 'opgegeven';
+        this.app.error(`[TeslaSched] commando bleef mislukken na ${MAX_WAKE_RETRIES} wake-pogingen — handmatig controleren`);
+        this.app.notifications?.send('⚠️ Tesla reageert niet op laad-commando — controleer de auto');
+        this._pending = null;
+      }
     }
 
     // 5. Record
@@ -212,7 +273,7 @@ class TeslaScheduler {
       selected_slots: selectedCount,
       current_price_eur: currentPrice,
       ready_by_local: readyByIso ? this.app.localTime(new Date(readyByIso)) : null,
-      commanded, cmd_count_today: this._cmdCount,
+      commanded, verify, cmd_count_today: this._cmdCount,
     };
     this._last = {
       decision, reason, charge_now: chargeNow,
@@ -226,6 +287,7 @@ class TeslaScheduler {
 
     this.app.log(
       `[TeslaSched] ${decision}${commanded ? ` → ${live ? 'LIVE' : 'DRYRUN'} ${commanded}@${maxA}A` : ''}` +
+      `${verify ? ` [verify:${verify}]` : ''}` +
       ` | SoC ${soc ?? '?'}%→${targetPct}% | ${reason}`
     );
   }
