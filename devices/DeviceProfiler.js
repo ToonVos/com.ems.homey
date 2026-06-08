@@ -75,7 +75,7 @@ class DeviceProfiler {
     const device = await this.app.getDevice(deviceId);
 
     const caps      = device.capabilities || [];
-    const driverUri = device.driverUri || '';
+    const driverUri = device.driverId || device.driverUri || '';
     const knownType = this._detectKnownDriver(driverUri);
 
     const profile = {

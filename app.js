@@ -58,7 +58,7 @@ class EmsApp extends Homey.App {
         .map(d => ({
           id:           d.id,
           name:         d.name         || '?',
-          driverUri:    d.driverUri    || '',
+          driverUri:    d.driverId     || '',
           capabilities: Array.isArray(d.capabilities)
             ? d.capabilities
             : Object.keys(d.capabilities || {}),

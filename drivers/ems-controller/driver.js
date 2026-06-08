@@ -57,7 +57,7 @@ class EmsControllerDriver extends Driver {
         const api        = await HomeyAPIV3Local.createAppAPI({ homey: this.homey });
         const devicesObj = await api.devices.getDevices();
         return Object.values(devicesObj).map(d => ({
-          id: d.id, name: d.name, driverUri: d.driverUri, capabilities: d.capabilities || [],
+          id: d.id, name: d.name, driverUri: d.driverId, capabilities: d.capabilities || [],
         }));
       } catch (err) { return []; }
     });
