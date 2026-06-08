@@ -2,6 +2,12 @@
 
 const ControllableBattery = require('../interfaces/ControllableBattery');
 
+// Autonome-handelaar-batterijen: deze sturen zichzelf aan (eigen optimalisatie /
+// onbalanshandel). De EMS mag ze NIET aansturen — dat haalt ze uit hun handel en
+// kost de gebruiker opbrengst. We lezen ze alleen (SoC + vermogen). Uitbreidbaar.
+// Generiek overrulebaar via settings 'battery_autonomous' = true.
+const AUTONOMOUS_DRIVER_PATTERNS = ['nl.zonneplan'];
+
 /**
  * BatteryAdapter
  * ──────────────
@@ -29,6 +35,23 @@ class BatteryAdapter extends ControllableBattery {
     this.homey    = app.homey;
     this.batteries = [];
     this._socThresholdFired = {};
+    this._autonomyCache = {};
+  }
+
+  // ─── Autonome-handelaar-detectie (module 1) ────────────────────────────────
+  // True → batterij stuurt zichzelf aan; EMS onderdrukt alle laad-/ontlaadsturing.
+  async _isAutonomous(bat) {
+    if (this.homey.settings.get('battery_autonomous')) return true; // globale override
+    if (this._autonomyCache[bat.id] !== undefined) return this._autonomyCache[bat.id];
+    let auto = false;
+    try {
+      const device = await this.app.getDevice(bat.id);
+      const uri    = device.driverId || device.driverUri || '';
+      auto = AUTONOMOUS_DRIVER_PATTERNS.some(p => uri.includes(p));
+    } catch (_) { /* onbekend → niet autonoom aannemen */ }
+    this._autonomyCache[bat.id] = auto;
+    if (auto) this.app.log(`[Battery] ${bat.id} = autonome handelaar — sturing onderdrukt (read-only)`);
+    return auto;
   }
 
   init(batteryConfigs) {
@@ -85,7 +108,6 @@ class BatteryAdapter extends ControllableBattery {
 
   async setCharging(enabled, targetW = null) {
     if (this.batteries.length === 0) return;
-    this.app.log(`[Battery] setCharging(${enabled}, ${targetW ?? 'auto'}W)`);
 
     const perUnitW = targetW && this.batteries.length > 0
       ? Math.round(targetW / this.batteries.length)
@@ -98,7 +120,6 @@ class BatteryAdapter extends ControllableBattery {
 
   async setDischarging(enabled, targetW = null) {
     if (this.batteries.length === 0) return;
-    this.app.log(`[Battery] setDischarging(${enabled}, ${targetW ?? 'auto'}W)`);
 
     const perUnitW = targetW && this.batteries.length > 0
       ? Math.round(targetW / this.batteries.length)
@@ -112,6 +133,7 @@ class BatteryAdapter extends ControllableBattery {
   // ─── Per-unit control ─────────────────────────────────────────────────────
 
   async _setUnitCharging(bat, enabled, targetW) {
+    if (await this._isAutonomous(bat)) return; // module 1: read-only handelaar
     try {
       const device = await this.app.getDevice(bat.id);
       const caps   = device.capabilities || [];
@@ -126,6 +148,7 @@ class BatteryAdapter extends ControllableBattery {
       if (enabled && targetW && caps.includes('marstek_charge_power')) {
         await device.setCapabilityValue('marstek_charge_power', Math.min(targetW, bat.maxChargeW || 2500));
       }
+      this.app.log(`[Battery] ${bat.id} charge=${enabled}${targetW ? ` ${targetW}W` : ''}`);
     } catch (err) {
       this.app.error(`[Battery] setCharging error for ${bat.id}:`, err.message);
       this.homey.emit('ems:batteryFallback', { id: bat.id, action: 'charge', enabled, targetW });
@@ -133,6 +156,7 @@ class BatteryAdapter extends ControllableBattery {
   }
 
   async _setUnitDischarging(bat, enabled, targetW) {
+    if (await this._isAutonomous(bat)) return; // module 1: read-only handelaar
     try {
       const device = await this.app.getDevice(bat.id);
       const caps   = device.capabilities || [];
@@ -144,6 +168,7 @@ class BatteryAdapter extends ControllableBattery {
       if (enabled && targetW && caps.includes('marstek_discharge_power')) {
         await device.setCapabilityValue('marstek_discharge_power', Math.min(targetW, bat.maxDischargeW || 2500));
       }
+      this.app.log(`[Battery] ${bat.id} discharge=${enabled}${targetW ? ` ${targetW}W` : ''}`);
     } catch (err) {
       this.app.error(`[Battery] setDischarging error for ${bat.id}:`, err.message);
       this.homey.emit('ems:batteryFallback', { id: bat.id, action: 'discharge', enabled, targetW });
