@@ -74,3 +74,8 @@ De oplaadstatus van de batterij is «state»
 - **Command-budget (FX1):** triggers + condities op Tesla S (API-fout, API-kosten/aanvragen/commando's-drempels) + actie "Stel online-interval in" (FX2) + "Maak wakker (wait)". v5.3-aannames bevestigd.
 - **<0°C-regel:** trigger "Modultemperatuur min/max" of capability `module_temp`.
 - **Nexus:** stuur-acties bestaan maar blijven ongebruikt (P2); we lezen vermogen/SoC/verdiensten.
+
+## Operationeel: publicatietijd day-ahead
+
+- Morgens day-ahead-prijzen verschijnen in PbtH (`meter_price_next_day_*`) **rond 13:15-13:25** (geobserveerd 13:21 op 2026-06-08). NL day-ahead wordt ~13:00 gepubliceerd; PbtH verwerkt kort daarna.
+- Gevolg voor de planner (latere modules): (her)plan met morgen-prijzen **na ~13:30**. Sluit aan op Menno's bestaande recalc-momenten (19:00/22:00).
