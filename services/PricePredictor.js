@@ -86,6 +86,41 @@ class PricePredictor {
     catch (err) { this.app.error('[PricePredictor] refresh-fout:', err.message); }
   }
 
+  /**
+   * Echte uur-prijzen (vandaag + morgen, na ~13:00 gepubliceerd) via EnergyZero.
+   * Alleen actief als day_ahead_provider === 'energyzero'. Geen API-key nodig.
+   * Geeft een Map(hourStartMs → all-in €/kWh), of null. Cache 1u.
+   */
+  async getActualPrices() {
+    if ((this.homey.settings.get('day_ahead_provider') || '') !== 'energyzero') return null;
+    const now = Date.now();
+    if (this._ezMap && (now - this._ezAt) < 60 * 60 * 1000) return this._ezMap;
+    try {
+      const ymd  = d => d.toISOString().substring(0, 10);
+      const from = new Date(now), till = new Date(now + 24 * 60 * 60 * 1000);
+      const url  = `https://api.energyzero.nl/v1/energyprices?fromDate=${ymd(from)}T00:00:00.000Z`
+                 + `&tillDate=${ymd(till)}T23:59:59.999Z&interval=4&usageType=1&inclBtw=false`;
+      const res  = await fetch(url, { signal: AbortSignal.timeout(12000) });
+      if (!res.ok) throw new Error(`EnergyZero HTTP ${res.status}`);
+      const data = await res.json();
+      const pr   = data.Prices || data.prices || [];
+      const HOUR = 3_600_000;
+      const map  = new Map();
+      for (const p of pr) {
+        const t = new Date(p.readingDate).getTime();
+        if (!isFinite(t) || typeof p.price !== 'number') continue;
+        map.set(Math.floor(t / HOUR) * HOUR, +(p.price * BTW + EB_PLUS_INKOOP).toFixed(5));
+      }
+      if (!map.size) throw new Error('geen prijzen ontvangen');
+      this._ezMap = map; this._ezAt = now;
+      this.app.log(`[PricePredictor] EnergyZero actuals: ${map.size} uur (vandaag+morgen)`);
+      return map;
+    } catch (err) {
+      this.app.error('[PricePredictor] EnergyZero-fout:', err.message);
+      return this._ezMap || null;   // val terug op laatste bekende
+    }
+  }
+
   /** Forceer een verse ophaalslag (bv. nadat contract op dynamisch is gezet). */
   async refreshNow() {
     this._fetchedAt = 0;

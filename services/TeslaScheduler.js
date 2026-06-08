@@ -96,6 +96,23 @@ class TeslaScheduler {
       .map(h => ({ ...h, t: new Date(h.ts).getTime() }));
     this._lastOverlay = 0;
     if (!base.length) return base;
+
+    const HOUR = 3_600_000;
+
+    // 1) EnergyZero: échte uurprijzen voor heel vandaag + morgen (indien provider).
+    try {
+      const actual = this.app.pricePredictor?.getActualPrices
+        ? await this.app.pricePredictor.getActualPrices() : null;
+      if (actual && actual.size) {
+        for (const s of base) {
+          const hs = Math.floor(s.t / HOUR) * HOUR;
+          if (actual.has(hs)) { s.import_eur = actual.get(hs); s.actual = true; this._lastOverlay++; }
+        }
+        if (this._lastOverlay) return base;   // volledige actuals → klaar
+      }
+    } catch (_) { /* val terug op PbtH-overlay */ }
+
+    // 2) Fallback: PbtH-overlay van de eerstvolgende 8 uur.
     let pbth = null;
     try {
       const dev  = await this.app.getDevice(this._pricesId());
@@ -108,7 +125,6 @@ class TeslaScheduler {
     } catch (_) { pbth = null; }
     if (!pbth || pbth.every(v => v == null)) return base;
 
-    const HOUR = 3_600_000;
     const nowHourStart = Math.floor(Date.now() / HOUR) * HOUR;
     for (const s of base) {
       const off = Math.round((Math.floor(s.t / HOUR) * HOUR - nowHourStart) / HOUR);

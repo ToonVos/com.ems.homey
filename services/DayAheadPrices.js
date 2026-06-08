@@ -54,6 +54,8 @@ class DayAheadPrices {
       let raw;
       if (this._provider === 'pbth') {
         raw = await this._fetchPbth();
+      } else if (this._provider === 'energyzero') {
+        raw = await this._fetchEnergyZero();
       } else if (this._provider === 'tibber') {
         raw = await this._fetchTibber();
       } else {
@@ -87,6 +89,26 @@ class DayAheadPrices {
     }
     if (prices.length === 0) throw new Error('Stroomprijzen-device gaf geen prijzen');
     return prices;
+  }
+
+  // ─── EnergyZero fetch (volledige uur-reeks vandaag+morgen, geen key) ────────
+
+  async _fetchEnergyZero() {
+    const ymd  = d => d.toISOString().substring(0, 10);
+    const now  = Date.now();
+    const from = new Date(now), till = new Date(now + 24 * 60 * 60 * 1000);
+    const url  = `https://api.energyzero.nl/v1/energyprices?fromDate=${ymd(from)}T00:00:00.000Z`
+               + `&tillDate=${ymd(till)}T23:59:59.999Z&interval=4&usageType=1&inclBtw=false`;
+    const res  = await fetch(url, { signal: AbortSignal.timeout(12000) });
+    if (!res.ok) throw new Error(`EnergyZero HTTP ${res.status}`);
+    const data = await res.json();
+    const pr   = data.Prices || data.prices || [];
+    const tz   = this.homey.clock.getTimezone();
+    return pr.map(p => {
+      const hour = Number(new Intl.DateTimeFormat('en-GB',
+        { timeZone: tz, hour: '2-digit', hourCycle: 'h23' }).format(new Date(p.readingDate)));
+      return { hour, price: +(p.price * 1.21 + 0.13085).toFixed(5) };  // all-in
+    });
   }
 
   // ─── ENTSO-E fetch ────────────────────────────────────────────────────────
