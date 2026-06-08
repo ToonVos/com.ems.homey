@@ -49,6 +49,12 @@
     .btn-auto { background: rgba(128,128,128,.14); color: var(--homey-text-color, #202124); }
     .btn:disabled { opacity: .4; cursor: default; }
 
+    .proj { margin: -4px 0 4px; font-size: 10px; opacity: .6; min-height: 13px; }
+    .proj .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+    .dot-on  { background: #22c55e; }
+    .dot-off { background: rgba(128,128,128,.4); }
+    .dot-warn{ background: #f59e0b; }
+
     .status { margin-top: 8px; font-size: 10px; opacity: .55; min-height: 13px; text-align: center; }
     .status.err { color: #ef4444; opacity: .9; }
     .status.ok  { color: #22c55e; opacity: .9; }
@@ -65,6 +71,8 @@
     <span class="soc-arrow">→</span>
     <span class="soc-target" id="tgt">–%</span>
   </div>
+
+  <div class="proj" id="proj"></div>
 
   <div class="label">Doel</div>
   <div class="chips" id="chips">
@@ -140,6 +148,21 @@
       $('mode').className   = 'mode ' + (s.active ? 'mode-manual' : 'mode-auto');
       $('deadline').value   = isoToLocalInput(s.deadline_iso, s.tz);
       renderChips();
+      renderProj(s);
+    }
+
+    function renderProj(s) {
+      const el = $('proj');
+      const sc = s.scheduler;
+      if (!sc) { el.innerHTML = ''; return; }
+      let dot = 'dot-off', txt;
+      if (sc.charge_now) { dot = 'dot-on'; txt = `laadt nu${sc.current_price_eur != null ? ` · €${sc.current_price_eur.toFixed(3)}/kWh` : ''}`; }
+      else if (sc.decision === 'at_target') { dot = 'dot-on'; txt = 'op doel'; }
+      else if (sc.decision === 'skip_disconnected') { txt = 'auto niet verbonden'; }
+      else if (sc.ready_by_local) { dot = 'dot-warn'; txt = `wacht op goedkoper · klaar ~${sc.ready_by_local.replace(/:\d\d$/, '')}`; }
+      else { txt = sc.reason || sc.decision || ''; }
+      const tag = sc.mode === 'dryrun' ? ' (proef)' : '';
+      el.innerHTML = `<span class="dot ${dot}"></span>${txt}${tag}`;
     }
 
     function setStatus(msg, kind) {

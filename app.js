@@ -6,7 +6,7 @@ const EmsManager                   = require('./managers/EmsManager');
 const FlowManager                  = require('./managers/FlowManager');
 const NotificationManager          = require('./managers/NotificationManager');
 const DecisionLog                  = require('./services/DecisionLog');
-const ChargeDryRun                 = require('./services/ChargeDryRun');
+const TeslaScheduler               = require('./services/TeslaScheduler');
 const PricePredictor               = require('./services/PricePredictor');
 
 class EmsApp extends Homey.App {
@@ -112,6 +112,7 @@ class EmsApp extends Homey.App {
     const active   = !!(pct != null && deadline);
     const defDeadline = this._nextSevenAm().toISOString();
     const soc = await this.getTeslaSoc();
+    const sched = this.teslaScheduler?.getStatus?.() || null;
     return {
       active,
       target_pct:      active ? pct : EmsApp.AUTO_TARGET_PCT,
@@ -122,6 +123,8 @@ class EmsApp extends Homey.App {
       max_horizon_h:   EmsApp.MAX_HORIZON_HOURS,
       tesla_soc:       soc,
       tz:              this.homey.clock.getTimezone(),
+      // Projectie van de prijs-scheduler (klaar-tijd, beslissing, modus).
+      scheduler:       sched,
     };
   }
 
@@ -209,16 +212,17 @@ class EmsApp extends Homey.App {
     this.decisionLog = new DecisionLog(this);
     await this.decisionLog.init();
 
-    // Fork-module 2 (dry-run): berekent gewenste laadstroom, stuurt NIETS.
-    this.chargeDryRun = new ChargeDryRun(this);
-    await this.chargeDryRun.init();
+    // Fork-module 2/3: prijs-gestuurde Tesla-laadregie (pre-saldering: goedkoopste
+    // uren tot deadline). Stuurt via TeslaEvAdapter; modus live/dryrun via settings.
+    this.teslaScheduler = new TeslaScheduler(this);
+    await this.teslaScheduler.init();
 
     this.log('  Home EMS ready.');
     this.log('═══════════════════════════════════');
   }
 
   async onUninit() {
-    if (this.chargeDryRun) this.chargeDryRun.destroy();
+    if (this.teslaScheduler) this.teslaScheduler.destroy();
     if (this.decisionLog) this.decisionLog.destroy();
     if (this.pricePredictor) this.pricePredictor.destroy();
     if (this.ems) await this.ems.destroy();
@@ -258,10 +262,10 @@ class EmsApp extends Homey.App {
         return this.decisionLog ? this.decisionLog.getRecent(limit) : [];
       }
 
-      // Fork-module 2 (dry-run) — verwachting-vs-werkelijkheid ophalen
-      case 'getChargeDryRun': {
+      // Fork-module 2/3 — Tesla-scheduler beslis-log ophalen
+      case 'getTeslaScheduler': {
         const limit = args?.limit ?? 200;
-        return this.chargeDryRun ? this.chargeDryRun.getRecent(limit) : [];
+        return this.teslaScheduler ? this.teslaScheduler.getRecent(limit) : [];
       }
 
       // Meerdaagse prijs-pipeline — horizon of samenvatting ophalen
