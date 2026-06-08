@@ -304,6 +304,12 @@ class EmsApp extends Homey.App {
         return this.teslaScheduler ? this.teslaScheduler.getRecent(limit) : [];
       }
 
+      // Debug-/tuning-laag — week-rapport (tuning-metrics uit de scheduler-log)
+      case 'getTuningReport': {
+        const days = args?.days ?? 7;
+        return this.decisionLog ? this.decisionLog.getWeekSummary(days) : null;
+      }
+
       // Meerdaagse prijs-pipeline — horizon of samenvatting ophalen
       case 'getPriceHorizon': {
         if (!this.pricePredictor) return null;

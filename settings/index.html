@@ -203,6 +203,24 @@
         });
       }
 
+      var btnT = document.getElementById('btnTuning');
+      if (btnT) {
+        btnT.addEventListener('click', function() {
+          var pre = document.getElementById('weatherResult');
+          btnT.textContent = '⏳ Ophalen...';
+          btnT.disabled = true;
+          Homey.api('GET', '/getTuningReport', {}).then(function(result) {
+            pre.textContent = JSON.stringify(result, null, 2);
+            pre.style.display = 'block'; document.getElementById('resultWrap').style.display = 'block';
+            btnT.textContent = '📊 Week-rapport'; btnT.disabled = false;
+          }).catch(function(err) {
+            pre.textContent = 'Fout: ' + (err && err.message ? err.message : String(err));
+            pre.style.display = 'block'; document.getElementById('resultWrap').style.display = 'block';
+            btnT.textContent = '📊 Week-rapport'; btnT.disabled = false;
+          });
+        });
+      }
+
       var btnCS = document.getElementById('btnCopySettings');
       if (btnCS) {
         btnCS.addEventListener('click', function() {
@@ -953,6 +971,9 @@
       </button>
       <button id="btnEvDiag" style="padding:9px 16px;background:#f97316;color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer">
         🚗 EV diagnose
+      </button>
+      <button id="btnTuning" style="padding:9px 16px;background:#0d9488;color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer">
+        📊 Week-rapport
       </button>
       <button id="btnCopySettings" style="padding:9px 16px;background:#8b5cf6;color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer">
         📋 Kopieer instellingen

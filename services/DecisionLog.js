@@ -24,6 +24,9 @@ const path = require('path');
 const USERDATA_DIR   = '/userdata';
 const RING_MAX       = 3000;            // ~10 dagen bij 5-min interval
 const DEFAULT_PERIOD = 5 * 60 * 1000;   // 5 minuten
+const DEFAULT_RETENTION_DAYS = 7;       // logs niet eindeloos laten doorlopen
+const DAY_MS         = 24 * 60 * 60 * 1000;
+const LOG_PREFIXES   = ['decisionlog', 'teslasched', 'pricehorizon'];
 
 // Device-mapping voor deze Homey ("Homey Pro van Toon"). Overschrijfbaar via
 // settings-key 'decisionlog_devices'. Zie docs/devices-inventory.md.
@@ -51,16 +54,24 @@ class DecisionLog {
     this._devices = this.homey.settings.get('decisionlog_devices') || DEFAULT_DEVICES;
     this._period  = this.homey.settings.get('decisionlog_period_ms') || DEFAULT_PERIOD;
 
+    this._retentionDays = this.homey.settings.get('debug_retention_days') || DEFAULT_RETENTION_DAYS;
+
     try { fs.mkdirSync(USERDATA_DIR, { recursive: true }); } catch (_) {}
 
     // Eerste snapshot direct, daarna periodiek.
     this._snapshotSafe();
     this._timer = this.homey.setInterval(() => this._snapshotSafe(), this._period);
-    this.app.log(`[DecisionLog] actief — interval ${Math.round(this._period / 1000)}s`);
+
+    // Dagelijks onderhoud: oude logs opruimen + week-rapport wegschrijven.
+    this._dailySafe();
+    this._dayTimer = this.homey.setInterval(() => this._dailySafe(), DAY_MS);
+
+    this.app.log(`[DecisionLog] actief — interval ${Math.round(this._period / 1000)}s, retentie ${this._retentionDays}d`);
   }
 
   destroy() {
     if (this._timer) this.homey.clearInterval(this._timer);
+    if (this._dayTimer) this.homey.clearInterval(this._dayTimer);
   }
 
   getRecent(limit = 200) {
@@ -142,9 +153,9 @@ class DecisionLog {
       prices:    prices,   // volledige PbtH-prijsset (h0-h7, vandaag+morgen avg/lowest/highest + uren + ranks + export)
       forecast:  { now_w: f_now, kwh_today: f_kwh_day, kwh_tomorrow: f_kwh_tom, tomorrow_peak_w: f_tom_peak },
       price_horizon: this.app.pricePredictor ? this.app.pricePredictor.getSummary() : null,
-      // 'decision' en 'outcome' worden later aangevuld door de engine resp. na-meting.
-      decision:  null,
-      outcome:   null,
+      // Gecorreleerd: de actuele scheduler-beslissing bij deze momentopname.
+      decision:  this.app.teslaScheduler?.getStatus?.() || null,
+      outcome:   null,   // optioneel later met kennis-achteraf aan te vullen
     };
 
     this._ring.push(rec);
@@ -158,6 +169,91 @@ class DecisionLog {
       ` | Nexus ${rec.nexus.soc}% ${rec.nexus.power_w}W` +
       ` | prijs €${rec.prices.meter_price_h0}`
     );
+  }
+
+  // ─── dagelijks onderhoud: retentie + week-rapport ──────────────────────────
+
+  _dailySafe() {
+    try {
+      this._pruneOld(this._retentionDays);
+      const sum = this.getWeekSummary(this._retentionDays);
+      fs.writeFileSync(path.join(USERDATA_DIR, 'tuning-summary.json'), JSON.stringify(sum, null, 2));
+    } catch (err) { this.app.error('[DebugLog] onderhoud-fout:', err.message); }
+  }
+
+  /** Verwijder log-bestanden ouder dan `days` (loopt zo niet eindeloos door). */
+  _pruneOld(days) {
+    const cutoff = Date.now() - days * DAY_MS;
+    const re = new RegExp(`^(${LOG_PREFIXES.join('|')})-(\\d{8})\\.jsonl$`);
+    let removed = 0;
+    for (const f of fs.readdirSync(USERDATA_DIR)) {
+      const m = re.exec(f);
+      if (!m) continue;
+      const d = m[2];
+      const t = Date.UTC(+d.slice(0, 4), +d.slice(4, 6) - 1, +d.slice(6, 8));
+      if (t < cutoff) { try { fs.unlinkSync(path.join(USERDATA_DIR, f)); removed++; } catch (_) {} }
+    }
+    if (removed) this.app.log(`[DebugLog] retentie: ${removed} oude logbestand(en) opgeruimd (> ${days}d)`);
+  }
+
+  /** Lees JSONL-records van de laatste `days` dagen voor een prefix. */
+  _readJsonl(prefix, days) {
+    const out = [];
+    const now = Date.now();
+    for (let i = 0; i < days; i++) {
+      const day = new Date(now - i * DAY_MS).toISOString().substring(0, 10).replace(/-/g, '');
+      try {
+        const txt = fs.readFileSync(path.join(USERDATA_DIR, `${prefix}-${day}.jsonl`), 'utf8');
+        for (const line of txt.split('\n')) {
+          if (line.trim()) { try { out.push(JSON.parse(line)); } catch (_) {} }
+        }
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  /** Week-rapport met tuning-metrics uit de scheduler-log (laatste `days` dagen). */
+  getWeekSummary(days = 7) {
+    const cutoff = Date.now() - days * DAY_MS;
+    const recs = this._readJsonl('teslasched', days)
+      .filter(r => r.ts && new Date(r.ts).getTime() >= cutoff);
+    const num  = v => typeof v === 'number' && isFinite(v);
+    const mean = a => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
+
+    const charging   = recs.filter(r => r.charge_now);
+    const chPrices   = charging.map(r => r.current_price_eur).filter(num);
+    const allPrices  = recs.map(r => r.current_price_eur).filter(num);
+    const avgPaid    = mean(chPrices);
+    const avgMarket  = mean(allPrices);
+    const socs       = recs.map(r => r.soc).filter(num);
+    const effRate    = mean(recs.map(r => r.eff_rate_kw).filter(num));
+    const byDecision = {};
+    for (const r of recs) byDecision[r.decision] = (byDecision[r.decision] || 0) + 1;
+
+    const PERIOD_H = 60 / 3600;   // teslasched-cyclus = 60s
+    const kwhCharged = effRate ? charging.length * PERIOD_H * effRate : null;
+    const savings = (avgMarket && avgPaid != null) ? (avgMarket - avgPaid) / avgMarket * 100 : null;
+
+    return {
+      window_days:          days,
+      generated_local:      this.app.localTime(),
+      records:              recs.length,
+      charging_ticks:       charging.length,
+      est_kwh_charged:      kwhCharged != null ? +kwhCharged.toFixed(1) : null,
+      eff_rate_kw:          effRate != null ? +effRate.toFixed(2) : null,
+      observed_kwh_per_h:   this.homey.settings.get('tesla_observed_kwh_per_h') ?? null,
+      avg_price_paid_eur:   avgPaid != null ? +avgPaid.toFixed(4) : null,
+      avg_price_market_eur: avgMarket != null ? +avgMarket.toFixed(4) : null,
+      price_savings_pct:    savings != null ? +savings.toFixed(1) : null,
+      mandatory_slots:      recs.filter(r => r.tier === 'verplicht').length,
+      opportunistic_slots:  recs.filter(r => r.tier === 'opportunistisch').length,
+      commands_sent:        recs.filter(r => r.commanded).length,
+      wake_retries:         recs.filter(r => typeof r.verify === 'string' && r.verify.startsWith('mismatch')).length,
+      give_ups:             recs.filter(r => r.verify === 'opgegeven').length,
+      soc_min:              socs.length ? Math.min(...socs) : null,
+      soc_max:              socs.length ? Math.max(...socs) : null,
+      decisions:            byDecision,
+    };
   }
 
   _appendJsonl(rec) {
