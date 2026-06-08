@@ -90,6 +90,20 @@ class DecisionLog {
     }
   }
 
+  // Álle prijs-capabilities van het PbtH Stroomprijzen-device in één keer:
+  // meter_price_h0..h7, this_day/next_day avg/lowest/highest, hour_*, ranks, export.
+  async _allPriceCaps() {
+    try {
+      const dev  = await this._getDevice(this._devices.prices);
+      const caps = dev?.capabilitiesObj || {};
+      const out  = {};
+      for (const [k, v] of Object.entries(caps)) {
+        if (/price|hour_|rank/.test(k)) out[k] = v?.value ?? null;
+      }
+      return out;
+    } catch (_) { delete this._deviceCache[this._devices.prices]; return {}; }
+  }
+
   async _snapshotSafe() {
     try { await this._snapshot(); }
     catch (err) { this.app.error('[DecisionLog] snapshot-fout:', err.message); }
@@ -105,16 +119,16 @@ class DecisionLog {
       t_soc, t_charge_state, t_car_state, t_odo, t_api_req, t_api_cost, t_api_cmd, t_sentry,
       b_soc, b_cur, b_cur_max, b_limit, b_power, b_temp, b_charging,
       n_power, n_soc, n_state, n_mode, n_earned_total, n_earned_day, n_cycles,
-      pr_h0, pr_h0_exp, pr_h1, pr_h2, pr_h3, pr_low_day, pr_high_day, pr_rank, pr_next_low, pr_next_high,
       f_now, f_kwh_day, f_kwh_tom, f_tom_peak,
+      prices,
     ] = await Promise.all([
       c(D.p1,'measure_power'), c(D.p1,'meter_power.imported'), c(D.p1,'meter_power.exported'),
       c(D.pv,'measure_power'), c(D.pv,'measure_power.grid'), c(D.pv,'measure_power.consumption'),
       c(D.tesla,'measure_battery'), c(D.tesla,'ev_charging_state'), c(D.tesla,'car_state'), c(D.tesla,'meter_car_odo'), c(D.tesla,'measure_api_request_count'), c(D.tesla,'measure_api_costs'), c(D.tesla,'measure_api_command_count'), c(D.tesla,'car_sentry_mode'),
       c(D.teslaBat,'measure_soc_level'), c(D.teslaBat,'measure_charge_current'), c(D.teslaBat,'measure_charge_current_max'), c(D.teslaBat,'measure_charge_limit_soc'), c(D.teslaBat,'measure_charge_power'), c(D.teslaBat,'module_temp'), c(D.teslaBat,'charging_state'),
       c(D.nexus,'measure_power'), c(D.nexus,'measure_battery'), c(D.nexus,'battery_charging_state'), c(D.nexus,'control_mode'), c(D.nexus,'meter_power.total_earned'), c(D.nexus,'meter_power.daily_earned'), c(D.nexus,'cycle_count'),
-      c(D.prices,'meter_price_h0'), c(D.prices,'meter_price_h0_export'), c(D.prices,'meter_price_h1'), c(D.prices,'meter_price_h2'), c(D.prices,'meter_price_h3'), c(D.prices,'meter_price_this_day_lowest'), c(D.prices,'meter_price_this_day_highest'), c(D.prices,'meter_rank_price_h0_this_day'), c(D.prices,'meter_price_next_day_lowest'), c(D.prices,'meter_price_next_day_highest'),
       c(D.forecast,'measure_power'), c(D.forecast,'meter_kwh_forecast.this_day'), c(D.forecast,'meter_kwh_forecast.tomorrow'), c(D.forecast,'measure_watt_forecast.tomorrow_peak'),
+      this._allPriceCaps(),   // álle prijsinfo die PbtH kent (h0-h7 + vandaag/morgen-aggregaten)
     ]);
 
     const rec = {
@@ -125,7 +139,7 @@ class DecisionLog {
       tesla:     { soc: t_soc, charging_state: t_charge_state, car_state: t_car_state, odo_km: t_odo, api_requests_day: t_api_req, api_costs: t_api_cost, api_commands_month: t_api_cmd, sentry: t_sentry },
       teslaBat:  { soc: b_soc, charge_current_a: b_cur, charge_current_max_a: b_cur_max, charge_limit_soc: b_limit, charge_power_kw: b_power, module_temp_c: b_temp, charging_state: b_charging },
       nexus:     { power_w: n_power, soc: n_soc, charging_state: n_state, control_mode: n_mode, total_earned_eur: n_earned_total, daily_earned_eur: n_earned_day, cycle_count: n_cycles },
-      prices:    { h0: pr_h0, h0_export: pr_h0_exp, h1: pr_h1, h2: pr_h2, h3: pr_h3, day_lowest: pr_low_day, day_highest: pr_high_day, rank_h0: pr_rank, next_day_lowest: pr_next_low, next_day_highest: pr_next_high },
+      prices:    prices,   // volledige PbtH-prijsset (h0-h7, vandaag+morgen avg/lowest/highest + uren + ranks + export)
       forecast:  { now_w: f_now, kwh_today: f_kwh_day, kwh_tomorrow: f_kwh_tom, tomorrow_peak_w: f_tom_peak },
       price_horizon: this.app.pricePredictor ? this.app.pricePredictor.getSummary() : null,
       // 'decision' en 'outcome' worden later aangevuld door de engine resp. na-meting.
@@ -142,7 +156,7 @@ class DecisionLog {
       ` | P1 ${rec.p1.power_w}W | PV ${rec.pv.power_w}W` +
       ` | Tesla ${rec.tesla.soc}% (${rec.tesla.charging_state})` +
       ` | Nexus ${rec.nexus.soc}% ${rec.nexus.power_w}W` +
-      ` | prijs €${rec.prices.h0}`
+      ` | prijs €${rec.prices.meter_price_h0}`
     );
   }
 
