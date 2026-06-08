@@ -56,6 +56,7 @@ function _injectEvProfileWidget() {
       input[type=range]{width:100%;accent-color:#1a73e8}
     </style>
     <div class="profile-cards" id="modeCards">
+      <div class="profile-card" data-mode="price"          onclick="selectMode('price')"><div class="p-icon">💶</div><div class="p-label">Prijs</div><div class="p-desc">Goedkoopste uren tot deadline</div></div>
       <div class="profile-card" data-mode="solar_only"     onclick="selectMode('solar_only')"><div class="p-icon">☀️</div><div class="p-label">Alleen zon</div><div class="p-desc">Stopt bij geen overschot</div></div>
       <div class="profile-card" data-mode="solar_and_grid" onclick="selectMode('solar_and_grid')"><div class="p-icon">☀️🔌</div><div class="p-label">Zon + net</div><div class="p-desc">Valt terug op net bij rit</div></div>
       <div class="profile-card" data-mode="fixed"          onclick="selectMode('fixed')"><div class="p-icon">📌</div><div class="p-label">Vast</div><div class="p-desc">Altijd vaste stroom</div></div>
@@ -155,6 +156,7 @@ function _updateProfileSummary(mode) {
   const minA  = parseInt(document.getElementById('minCurrentSlider')?.value   || 6);
   const toW   = a => Math.round(a * 230 * _evPhases);
   const msgs  = {
+    price:         `💶 Laadt in de goedkoopste uren tot de deadline (dynamisch contract). Doel/tijd stel je in via de dashboard-tegel.`,
     solar_only:    `☀️ Laadt tussen ${toW(minA)}W en ${toW(maxA)}W bij zonne-overschot.`,
     solar_and_grid:`☀️🔌 Volgt zon (${toW(minA)}–${toW(maxA)}W). Bij rit-deadline: bijladen van net.`,
     fixed:         `📌 Laadt altijd met ${fixed}A (${toW(fixed)}W) — ook zonder zon.`,

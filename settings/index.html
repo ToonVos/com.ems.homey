@@ -396,6 +396,9 @@
       var solar = document.getElementById('ev_grp_solar');
       if (price) price.style.display = isPrice ? 'block' : 'none';
       if (solar) solar.style.display = isPrice ? 'none'  : 'block';
+      // EMS Gedrag (overschot-drempel) is zon-strategie → niet relevant in prijs-modus.
+      var gedrag = document.getElementById('ems-gedrag-card');
+      if (gedrag) gedrag.style.display = isPrice ? 'none' : 'block';
     }
 
     function updatePvTotal() {
@@ -949,7 +952,7 @@
   <!-- ═══════════════════════════════════════════════════════════
        6. EMS GEDRAG
        ═══════════════════════════════════════════════════════════ -->
-  <div class="card">
+  <div class="card" id="ems-gedrag-card">
     <div class="card-title"><span class="icon">⚙️</span> EMS Gedrag</div>
     <label>Overschot drempel (W)</label>
     <p class="hint">Minimaal zonne-overschot (netto teruglevering) voordat het EMS actie onderneemt zoals het starten van EV-laden of een dump-load.</p>
