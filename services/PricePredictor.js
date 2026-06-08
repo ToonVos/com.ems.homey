@@ -69,6 +69,7 @@ class PricePredictor {
       import_max: +Math.max(...imp).toFixed(4),
       import_avg: +(imp.reduce((s, v) => s + v, 0) / imp.length).toFixed(4),
       cheapest_ts: cheapest.ts,
+      cheapest_ts_local: this.app.localTime(new Date(cheapest.ts)),
       cheapest_import_eur: +cheapest.import_eur.toFixed(4),
     };
   }
@@ -110,7 +111,7 @@ class PricePredictor {
     this._writeSnapshot(sum);
     this.app.log(
       `[PricePredictor] horizon ververst — ${sum.hours}u | import €${sum.import_min}–${sum.import_max} (gem €${sum.import_avg})` +
-      ` | goedkoopst €${sum.cheapest_import_eur} @ ${sum.cheapest_ts}`
+      ` | goedkoopst €${sum.cheapest_import_eur} @ ${sum.cheapest_ts_local}`
     );
   }
 

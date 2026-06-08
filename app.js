@@ -27,6 +27,16 @@ class EmsApp extends Homey.App {
   // In Homey SDK3, this.homey.devices is NOT available in App/Driver context.
   // Use HomeyAPIV3Local.createAppAPI() to get a live device with capability values.
 
+  // Lokale tijd (Amsterdam) voor leesbare logs/records — Homey's eigen [log]-prefix
+  // blijft UTC, maar onze eigen timestamps tonen we lokaal.
+  localTime(d = new Date()) {
+    try {
+      return d.toLocaleString('nl-NL', { timeZone: this.homey.clock.getTimezone(), hour12: false });
+    } catch (_) {
+      return d.toISOString();
+    }
+  }
+
   async getDevice(id) {
     if (!this._homeyApi) {
       this._homeyApi = await HomeyAPIV3Local.createAppAPI({ homey: this.homey });

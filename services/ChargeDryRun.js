@@ -137,6 +137,7 @@ class ChargeDryRun {
 
     const rec = {
       ts: new Date().toISOString(),
+      ts_local: this.app.localTime(),
       connected, ev_state, charge_state,
       inputs:      { pv_w, grid_w, tesla_charge_w: Math.round(teslaW), tesla_charge_a: charge_a, phases, soc, charge_limit },
       expectation: { desired_a: desiredA, desired_w: Math.round(desiredW), action, would_send: wouldSend, reason },

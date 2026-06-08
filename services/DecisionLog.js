@@ -119,6 +119,7 @@ class DecisionLog {
 
     const rec = {
       ts: new Date().toISOString(),
+      ts_local: this.app.localTime(),
       p1:        { power_w: p1_power, imported_kwh: p1_imp, exported_kwh: p1_exp },
       pv:        { power_w: pv_power, grid_w: pv_grid, consumption_w: pv_cons },
       tesla:     { soc: t_soc, charging_state: t_charge_state, car_state: t_car_state, odo_km: t_odo, api_requests_day: t_api_req, api_costs: t_api_cost, api_commands_month: t_api_cmd, sentry: t_sentry },
