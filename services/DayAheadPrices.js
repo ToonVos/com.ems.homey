@@ -29,8 +29,13 @@ class DayAheadPrices {
   }
 
   async init(provider) {
-    this._provider = provider || 'entso-e';
-    this._apiKey   = this.homey.settings.get('day_ahead_api_key') || '';
+    this._apiKey        = this.homey.settings.get('day_ahead_api_key') || '';
+    // Power-by-the-Hour 'Stroomprijzen'-device als primaire bron voor D+0/D+1
+    // (geen API-key nodig, lokaal). Overschrijfbaar via settings; valt terug op
+    // de geconfigureerde provider als geen device beschikbaar is.
+    this._pbthDeviceId = this.homey.settings.get('pbth_price_device')
+      || 'cc19fcf6-8f6f-4174-8f9b-6163b630f360';
+    this._provider     = this._pbthDeviceId ? 'pbth' : (provider || 'entso-e');
     this.app.log(`[DayAhead] Provider: ${this._provider}`);
   }
 
@@ -44,7 +49,9 @@ class DayAheadPrices {
 
     try {
       let raw;
-      if (this._provider === 'tibber') {
+      if (this._provider === 'pbth') {
+        raw = await this._fetchPbth();
+      } else if (this._provider === 'tibber') {
         raw = await this._fetchTibber();
       } else {
         raw = await this._fetchEntsoe();
@@ -57,6 +64,26 @@ class DayAheadPrices {
       this.app.error('[DayAhead] Fetch error:', err.message);
       return this._flatPrices(); // fallback: flat pricing
     }
+  }
+
+  // ─── Power-by-the-Hour fetch (Stroomprijzen-device, all-in, geen key) ───────
+
+  async _fetchPbth() {
+    const device = await this.app.getDevice(this._pbthDeviceId);
+    const caps   = device?.capabilitiesObj || {};
+
+    // meter_price_h0..h7 = all-in prijs voor de komende 8 uur (h0 = huidig uur).
+    const tz = this.homey.clock.getTimezone();
+    const nowHour = Number(new Intl.DateTimeFormat('en-GB',
+      { timeZone: tz, hour: '2-digit', hourCycle: 'h23' }).format(new Date()));
+
+    const prices = [];
+    for (let i = 0; i < 8; i++) {
+      const v = caps[`meter_price_h${i}`]?.value;
+      if (v != null) prices.push({ hour: (nowHour + i) % 24, price: v });
+    }
+    if (prices.length === 0) throw new Error('Stroomprijzen-device gaf geen prijzen');
+    return prices;
   }
 
   // ─── ENTSO-E fetch ────────────────────────────────────────────────────────
