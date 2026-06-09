@@ -24,7 +24,7 @@ const path = require('path');
 const USERDATA_DIR   = '/userdata';
 const RING_MAX       = 3000;            // ~10 dagen bij 5-min interval
 const DEFAULT_PERIOD = 5 * 60 * 1000;   // 5 minuten
-const DEFAULT_RETENTION_DAYS = 7;       // logs niet eindeloos laten doorlopen
+const DEFAULT_RETENTION_DAYS = 30;      // logs niet eindeloos laten doorlopen (~1,7 MB/dag ≈ 51 MB)
 const DAY_MS         = 24 * 60 * 60 * 1000;
 const LOG_PREFIXES   = ['decisionlog', 'teslasched', 'pricehorizon'];
 
