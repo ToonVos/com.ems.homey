@@ -224,16 +224,20 @@
       el.className = 'status' + (kind ? ' ' + kind : '');
     }
 
-    let _ready = false;
+    // Runtime-resize op de werkelijke inhoud (Homey.setHeight), zodat er geen
+    // witruimte onder de knoppen blijft. Homey.ready zet alleen de begin-hoogte.
     function fitHeight() {
-      try { Homey.ready({ height: Math.ceil(document.body.scrollHeight) + 2 }); _ready = true; }
-      catch (_) {}
+      const h = Math.ceil(document.body.scrollHeight) + 2;
+      try {
+        if (typeof Homey.setHeight === 'function') Homey.setHeight(h);
+        else Homey.ready({ height: h });
+      } catch (_) {}
     }
 
     async function load() {
       try { applyState(await Homey.api('GET', '/getOverride', {})); }
       catch (e) { setStatus('Laden mislukt', 'err'); }
-      finally { fitHeight(); }   // hoogte op de inhoud — geen witruimte onder de knoppen
+      finally { fitHeight(); }
     }
 
     async function save() {
@@ -260,10 +264,9 @@
         c.addEventListener('click', () => { selPct = Number(c.dataset.pct); renderChips(); }));
       $('save').addEventListener('click', save);
       $('auto').addEventListener('click', auto);
-      load();                       // roept fitHeight() aan → meldt 'ready' met juiste hoogte
+      Homey.ready();                // widget tonen; hoogte volgt via setHeight()
+      load();                       // rendert + fitHeight() → setHeight op de inhoud
       setInterval(load, 60_000);
-      // Vangnet: als de eerste load hangt, tóch ready melden zodat de tegel toont.
-      setTimeout(() => { if (!_ready) { try { Homey.ready({ height: 360 }); } catch (_) {} } }, 4000);
     }
   </script>
 </body>
