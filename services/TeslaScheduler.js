@@ -499,23 +499,43 @@ class TeslaScheduler {
       }
     }
 
-    // Sturen (alleen bij wijziging). Wake (≈2 ct) alleen om te STARTEN bij
-    // aanhoudend overschot terwijl de auto slaapt — stoppen hoeft nooit te wekken.
+    // Sturen — reconcile naar 'want', met backoff + wake.
+    // Wake (≈2 ct) als de auto slaapt EN we een toestand-wissel nodig hebben:
+    //   • STARTEN bij aanhoudend overschot, of
+    //   • STOPPEN terwijl de auto slaapt maar tóch laadt (anders laadt hij door
+    //     uit het net — dat kost ~€1/uur, dus de wake is het ruim waard).
     if (connected && soc != null && live) {
-      const actual = (await this._readActual()).charging === true;
-      const ampChange = want && this._lastAmps !== Math.round(amps);
-      if (actual !== want || ampChange) {
-        if (want && !actual) {
+      const actual    = (await this._readActual()).charging === true;
+      const ampChange = want && Math.abs((this._lastAmps ?? -99) - Math.round(amps)) >= 2;  // hysterese 2A
+      const mismatch  = (actual !== want) || ampChange;
+      const wishChanged = this._sLastWant !== want;
+      const lastFailed  = !!this._lastDriveError;
+      const streak      = this._sStreak || 0;
+      const givenUp     = streak >= MAX_DRIVE_ATTEMPTS;
+      const interval    = givenUp ? GIVEUP_MS : (lastFailed ? FAIL_RETRY_MS : RECONCILE_MS);
+      const due         = wishChanged || ampChange || (Date.now() - (this._sLastTs || 0)) >= interval;
+
+      if (mismatch && due) {
+        this._sStreak = wishChanged ? 1 : streak + 1;
+        // Wake bij slapende auto wanneer een echte start/stop nodig is (niet voor
+        // louter amps), of na een mislukte poging; niet meer na opgeven.
+        const stateChange = actual !== want;
+        if (!givenUp && stateChange) {
           const cs = await this._carState();
-          if (cs && cs !== 'online') { await this._wake(); verify = 'wake'; }
+          if (cs && cs !== 'online') { await this._wake(); verify = `wake#${this._sStreak}`; }
         }
         const ok = await this._drive(want, ceiling, want ? amps : undefined);
         if (ok) {
           commanded = want ? `start@${Math.round(amps)}A` : 'stop';
-          this._bumpCmd();
           if (want && !actual) this._chargeStartedTs = now;
           if (!want && actual) this._chargeStoppedTs = now;
         }
+        this._sLastWant = want; this._sLastTs = Date.now(); this._bumpCmd();
+        if (this._sStreak === MAX_DRIVE_ATTEMPTS) {
+          this.app.notifications?.send(`⚠️ Tesla volgt het overschot-${want ? 'start' : 'stop'}-commando niet (${this._lastDriveError || '?'}) — controleer de auto.`);
+        }
+      } else if (!mismatch) {
+        this._sStreak = 0; this._lastDriveError = null;
       }
     }
 
