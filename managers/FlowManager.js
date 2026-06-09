@@ -13,21 +13,21 @@ class FlowManager {
   _registerTriggers() {
     const trigger = (id) => this.homey.flow.getTriggerCard(id);
 
-    const notify = (msg) => this.app.notifications?.send(msg);
+    const notify = (msg, cat) => this.app.notifications?.send(msg, cat);
 
     this.homey.on('ems:modeChanged',          mode    => trigger('ems_mode_changed').trigger({ mode }));
-    this.homey.on('ems:prio1NotFeasible',     ()      => { trigger('prio1_not_feasible').trigger(); notify('⚠️ EMS: Dagplan krap — onvoldoende zon voor alle prioriteiten'); });
-    this.homey.on('ems:evReadyForDeparture',  data    => { trigger('ev_ready_for_departure').trigger(data); notify(`✅ EV klaar voor vertrek — ${data.soc?.toFixed(0) ?? '?'}% geladen`); });
-    this.homey.on('ems:batteryBelowMinimum',  data    => { trigger('battery_below_minimum').trigger(data); notify(`🔋 Thuisaccu onder minimum — ${data.soc?.toFixed(0) ?? '?'}% SoC`); });
+    this.homey.on('ems:prio1NotFeasible',     ()      => { trigger('prio1_not_feasible').trigger(); notify('⚠️ EMS: Dagplan krap — onvoldoende zon voor alle prioriteiten', 'plan'); });
+    this.homey.on('ems:evReadyForDeparture',  data    => { trigger('ev_ready_for_departure').trigger(data); notify(`✅ EV klaar voor vertrek — ${data.soc?.toFixed(0) ?? '?'}% geladen`, 'ev'); });
+    this.homey.on('ems:batteryBelowMinimum',  data    => { trigger('battery_below_minimum').trigger(data); notify(`🔋 Thuisaccu onder minimum — ${data.soc?.toFixed(0) ?? '?'}% SoC`, 'battery'); });
     this.homey.on('ems:dumpLoadActivated',    ()      => trigger('dump_load_activated').trigger());
     this.homey.on('ems:dumpLoadDeactivated',  ()      => trigger('dump_load_deactivated').trigger());
-    this.homey.on('ems:heatpumpModeChanged',  mode    => { trigger('heatpump_mode_switched').trigger({ mode }); notify(`🌡️ Warmtepomp omgeschakeld naar ${mode === 'cooling' ? 'koelen' : 'verwarmen'}`); });
+    this.homey.on('ems:heatpumpModeChanged',  mode    => { trigger('heatpump_mode_switched').trigger({ mode }); notify(`🌡️ Warmtepomp omgeschakeld naar ${mode === 'cooling' ? 'koelen' : 'verwarmen'}`, 'heatpump'); });
 
     // EV charging started/stopped
     this.homey.on('ems:evChargingStarted',    data    => {
       const src = this.app.ems?.tesla?._isChargingByEms ? 'via EMS' : 'eigen schema';
       const pwr = data.powerW ? Math.round(data.powerW) + 'W' : '?W';
-      notify(`🚗 EV laden gestart — ${pwr} (${src})`);
+      notify(`🚗 EV laden gestart — ${pwr} (${src})`, 'session');
     });
 
     // EV ingeplugd → herbereken plan direct met actuele SoC
@@ -38,7 +38,7 @@ class FlowManager {
       this.app.ems?.planningEngine?.recalculate('ev_connected', target)
         .catch(e => this.app.error('[Flow] ev_connected recalc:', e));
     });
-    this.homey.on('ems:evChargingStopped',    data    => { const kwh = data.sessionKwh?.toFixed(1); notify(`🔌 EV laden gestopt${kwh ? ` — ${kwh} kWh geladen` : ''}`); });
+    this.homey.on('ems:evChargingStopped',    data    => { const kwh = data.sessionKwh?.toFixed(1); notify(`🔌 EV laden gestopt${kwh ? ` — ${kwh} kWh geladen` : ''}`, 'session'); });
 
     // EV charge control — user wires these trigger cards to Tesla flow actions
     // "When EMS wants to set EV charge current [current A] → Tesla: Stel laadstroom in op [current]"

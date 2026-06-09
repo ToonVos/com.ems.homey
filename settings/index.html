@@ -73,6 +73,7 @@
         if (hb) hb.checked = vals[4] == null ? true : !!vals[4];   // default aan
         showNightSection();
         updatePvTotal();
+        loadNotifyToggles();
       }).catch(function(err) {
         console.error('[EMS settings] load error:', err);
         toggleDynamic('fixed');
@@ -264,7 +265,7 @@
             }
             saveDeviceSettings();
           } else {
-            if (el.id.indexOf('ev_home_') === 0 || el.id === 'ev_battery_health') {
+            if (el.id.indexOf('ev_home_') === 0 || el.id === 'ev_battery_health' || el.id.indexOf('notify_') === 0) {
               _Homey.set(el.id, el.checked).then(showSaved).catch(function(e) {
                 console.error('[EMS settings] save error:', el.id, e);
               });
@@ -355,6 +356,18 @@
     function showEvSection()      { document.getElementById('ev-section').style.display      = document.getElementById('hasEv').checked        ? 'block' : 'none'; }
     function showChargerSection() { document.getElementById('charger-section').style.display = document.getElementById('hasEvCharger').checked ? 'block' : 'none'; }
     function showHpSection()      { document.getElementById('hp-section').style.display      = document.getElementById('hasHeatPump').checked  ? 'block' : 'none'; }
+
+    // Meldingen-vinkboxen laden (defaults gelijk aan NotificationManager).
+    function loadNotifyToggles() {
+      var defs = { notify_plan:false, notify_battery:false, notify_session:false,
+                   notify_ev:true, notify_heatpump:true, notify_tesla:true, notify_errors:true };
+      Object.keys(defs).forEach(function(key) {
+        _Homey.get(key).then(function(v) {
+          var el = document.getElementById(key);
+          if (el) el.checked = (v == null) ? defs[key] : !!v;
+        }).catch(function() {});
+      });
+    }
 
     function showNightSection() {
       var el = document.getElementById('ev_night_section');
@@ -963,6 +976,21 @@
     <label>Overschot drempel (W)</label>
     <p class="hint">Minimaal zonne-overschot (netto teruglevering) voordat het EMS actie onderneemt zoals het starten van EV-laden of een dump-load.</p>
     <input type="number" id="surplus_threshold" value="300" step="50" min="50" max="2000" />
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       6b. MELDINGEN (TIJDLIJN)
+       ═══════════════════════════════════════════════════════════ -->
+  <div class="card">
+    <div class="card-title"><span class="icon">🔔</span> Meldingen (tijdlijn)</div>
+    <p class="hint">Kies welke groepen in de Homey-tijdlijn verschijnen. Identieke meldingen worden sowieso hooguit 1×/30 min getoond.</p>
+    <div class="toggle-row"><input type="checkbox" id="notify_plan" /><label for="notify_plan">📅 Dagplan (krap/haalbaar, prioriteit) — vaak</label></div>
+    <div class="toggle-row"><input type="checkbox" id="notify_battery" /><label for="notify_battery">🔋 Thuisaccu (onder minimum / reserve) — vaak</label></div>
+    <div class="toggle-row"><input type="checkbox" id="notify_session" /><label for="notify_session">🚗 EV laden gestart/gestopt — vaak</label></div>
+    <div class="toggle-row"><input type="checkbox" id="notify_ev" /><label for="notify_ev">✅ EV klaar voor vertrek / rit</label></div>
+    <div class="toggle-row"><input type="checkbox" id="notify_heatpump" /><label for="notify_heatpump">🌡️ Warmtepomp omgeschakeld</label></div>
+    <div class="toggle-row"><input type="checkbox" id="notify_tesla" /><label for="notify_tesla">⚠️ Tesla-sturing waarschuwingen</label></div>
+    <div class="toggle-row"><input type="checkbox" id="notify_errors" /><label for="notify_errors">❌ Fouten (weersdata e.d.)</label></div>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════

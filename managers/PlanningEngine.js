@@ -309,7 +309,8 @@ class PlanningEngine {
         const feasEmoji = prio1Feasible ? '✅' : '⚠️';
         const feasTxt   = prio1Feasible ? 'haalbaar' : 'krap';
         this.app.notifications?.send(
-          `${feasEmoji} Plan ${planDate}: ${totalPvKwh.toFixed(1)} kWh zon, ${evNeededKwh.toFixed(1)} kWh EV — ${feasTxt}`
+          `${feasEmoji} Plan ${planDate}: ${totalPvKwh.toFixed(1)} kWh zon, ${evNeededKwh.toFixed(1)} kWh EV — ${feasTxt}`,
+          'plan'
         );
       }
 

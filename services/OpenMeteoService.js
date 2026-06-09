@@ -94,7 +94,7 @@ class OpenMeteoService {
           await new Promise(r => setTimeout(r, 10_000));
         } else {
           // Only notify after both attempts failed — avoid spam on transient timeouts
-          this.app.notifications?.send(`❌ Weersdata ophalen mislukt na 2 pogingen: ${err.message.slice(0, 50)}`);
+          this.app.notifications?.send(`❌ Weersdata ophalen mislukt na 2 pogingen: ${err.message.slice(0, 50)}`, 'errors');
           return this._fallback();
         }
       }

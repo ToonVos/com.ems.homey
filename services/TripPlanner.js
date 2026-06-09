@@ -57,6 +57,7 @@ class TripPlanner {
     // Send notification
     await this.app.notifications.send(
       `🚗 EV trip planned: depart at ${departure.toLocaleTimeString()} with ${targetSoc}% charge`,
+      'ev',
     );
   }
 

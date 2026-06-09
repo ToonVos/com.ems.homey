@@ -392,7 +392,8 @@ class TeslaScheduler {
           if (!ok) commanded = null;
           if (this._mismatchStreak === MAX_DRIVE_ATTEMPTS) {
             this.app.notifications?.send(
-              `⚠️ Tesla volgt het ${want2 ? 'start' : 'stop'}-commando niet (${this._lastDriveError || '?'}). Ik probeer het minder vaak; controleer de auto/Tesla-app.`
+              `⚠️ Tesla volgt het ${want2 ? 'start' : 'stop'}-commando niet (${this._lastDriveError || '?'}). Ik probeer het minder vaak; controleer de auto/Tesla-app.`,
+              'tesla'
             );
           }
         }
@@ -567,7 +568,7 @@ class TeslaScheduler {
         }
         this._sLastWant = want; this._sLastTs = Date.now(); this._bumpCmd();
         if (this._sStreak === MAX_DRIVE_ATTEMPTS) {
-          this.app.notifications?.send(`⚠️ Tesla volgt het ${want ? 'start' : 'stop'}-commando niet (${this._lastDriveError || '?'}) — controleer de auto.`);
+          this.app.notifications?.send(`⚠️ Tesla volgt het ${want ? 'start' : 'stop'}-commando niet (${this._lastDriveError || '?'}) — controleer de auto.`, 'tesla');
         }
       } else if (!mismatch) {
         this._sStreak = 0; this._lastDriveError = null;
