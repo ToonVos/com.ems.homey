@@ -176,7 +176,7 @@
         const datum = new Intl.DateTimeFormat('nl-NL', { timeZone: s.tz, weekday: 'short', day: 'numeric', month: 'short' }).format(d);
         const modusF = sc.mode === 'dryrun' ? '🧪 proef' : '🟢 live';
         el.innerHTML =
-          `<div class="pr-row pr-head"><span class="dot dot-on"></span>🏖️ Vakantie-hold ${s.hold_target ?? 55}%</div>` +
+          `<div class="pr-row pr-head"><span class="dot dot-on"></span>🍃 Spaarstand ${s.hold_target ?? 55}%</div>` +
           `<div class="pr-row">doel ${s.target_pct}% gepland voor ${datum}</div>` +
           `<div class="pr-row pr-muted">start in de goedkoopste uren ~7 dagen ervoor</div>` +
           `<div class="pr-row pr-foot">${modusF}${sc.updated_local ? ` · ${shortWhen(sc.updated_local)}` : ''}</div>`;
