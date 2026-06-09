@@ -184,9 +184,15 @@
       const rows = [`<div class="pr-row pr-head"><span class="dot ${dot}"></span>${icon} ${head}</div>`];
 
       if (sc.connected && surplus) {
-        // Overschot-modus: leg uit wat hij doet/verwacht.
-        rows.push(`<div class="pr-row">${sc.reason || 'volgt zonne-overschot'}</div>`);
-        rows.push(`<div class="pr-row pr-muted">geen overschot → wacht (geen netinkoop)</div>`);
+        // Overschot+prijs-modus (post-saldering).
+        const bits = [];
+        if (sc.current_price_eur != null) bits.push(`nu €${sc.current_price_eur.toFixed(3)}/kWh`);
+        if (sc.kwh_needed > 0)            bits.push(`verplicht nog ${sc.kwh_needed.toFixed(1)} kWh`);
+        if (bits.length) rows.push(`<div class="pr-row">${bits.join(' · ')}</div>`);
+        if (!sc.charge_now && sc.next_charge_local)
+          rows.push(`<div class="pr-row">⏱ anders verplicht laden ~${shortWhen(sc.next_charge_local)} (goedkoop uur)</div>`);
+        else if (!sc.charge_now && (sc.soc != null && sc.target_pct != null && sc.soc >= sc.target_pct))
+          rows.push(`<div class="pr-row pr-muted">boven doel → alleen gratis zonne-overschot</div>`);
       } else if (sc.connected) {
         // Prijs-modus.
         const bits = [];

@@ -194,7 +194,7 @@ class TeslaScheduler {
 
     if (chargeMode === 'surplus') {
       const st0 = await tesla.getState();
-      return this._tickSurplus(tesla, st0);
+      return this._tickCombi(tesla, st0);
     }
 
     // Prijs-scheduler vereist laadmodus 'price' ÉN een dynamisch contract.
@@ -458,7 +458,7 @@ class TeslaScheduler {
   // amp-aanpassingen zijn verwaarloosbaar; alleen STARTEN wekt (≈2 ct) als de
   // auto slaapt — en dat doen we enkel bij aanhoudend overschot. Hergebruikt
   // Menno's zon-instellingen. Alleen waardevol post-saldering (export ≪ import).
-  async _tickSurplus(tesla, st) {
+  async _tickCombi(tesla, st) {
     const live = this._isLive();
     const s = this.homey.settings;
     const cfg = this.app.ems?.config?.ev || {};
@@ -470,55 +470,81 @@ class TeslaScheduler {
     const stopMin  = s.get('ev_stop_delay_ticks') ?? 3;
     const minOnMs  = (s.get('ev_min_on_min') ?? 10) * 60_000;
     const minOffMs = (s.get('ev_min_off_min') ?? 15) * 60_000;
-    const ceiling  = Math.min(s.get('ev_opportunistic_soc') ?? 85, 100);
+    const floor   = s.get('ev_floor_soc') ?? 20;
+    const capKwh  = this._params().cap;
     const V = 230, now = Date.now();
 
     const connected = st?.connected ?? false;
     const soc = st?.soc ?? null;
 
-    let decision = 'idle', reason = '', want = false, amps = 0, commanded = null, verify = null;
+    // Doelen: verplicht doel + deadline (override of standaard), plafond.
+    const ov = await this.app.getTeslaOverride();
+    const mandatory = ov.target_pct;
+    const dlMs = new Date(ov.deadline_iso).getTime();
+    const ceiling = ov.active ? mandatory : Math.min(s.get('ev_opportunistic_soc') ?? 85, 100);
+
+    // Overschot nu (zero-export): beschikbaar = huidig EV-vermogen − grid − buffer.
+    const grid   = await this._readGridW();
+    const teslaW = await this._readChargePowerW();
+    const maxW = maxA * phases * V, minW = minA * phases * V;
+    const availW = teslaW - grid - buffer;
+    const surplusA = Math.floor(Math.max(0, Math.min(maxW, availW)) / (phases * V));
+    const actual = (await this._readActual()).charging === true;
+    if (availW >= minW) { if (!this._surplusSince) this._surplusSince = now; } else { this._surplusSince = 0; }
+    const sustainedOk = this._surplusSince && (now - this._surplusSince) >= startMin * 60_000;
+
+    // Prijs-horizon (voor de goedkoopste-uren-fallback van het verplichte deel).
+    const horizon = (await this._blendedHorizon()).sort((a, b) => a.t - b.t);
+    const cur = horizon.find(h => now >= h.t && now < h.t + SLOT_MIN * 60_000);
+    const curPrice = cur ? cur.import_eur : null;
+
+    let decision = 'idle', reason = '', want = false, amps = 0, cap = mandatory, tier = null;
+    let nextChargeIso = null, readyByIso = null, kwhNeeded = 0;
 
     if (!connected) { decision = 'skip_disconnected'; reason = 'auto niet verbonden'; this._surplusSince = 0; }
     else if (soc == null) { decision = 'skip_no_soc'; reason = 'SoC onbekend'; }
+    else if (soc <= floor) { want = true; amps = maxA; cap = Math.max(mandatory, ceiling); decision = 'panic_charge'; reason = `SoC ${soc}% ≤ vloer ${floor}% — laden`; }
     else if (soc >= ceiling) { decision = 'at_target'; reason = `SoC ${soc}% ≥ plafond ${ceiling}%`; this._surplusSince = 0; }
+    else if (soc < mandatory) {
+      // VERPLICHT deel: gratis overschot eerst, anders goedkoopste uren tot deadline.
+      cap = mandatory;
+      kwhNeeded = Math.max(0, (mandatory - soc) / 100 * capKwh) / EFFICIENCY;
+      const slotKwh = (maxW / 1000) * SLOT_H;
+      const within  = horizon.filter(h => h.t >= now - SLOT_MIN * 60_000 && h.t <= dlMs);
+      const sel = this._pickCheapest(within, kwhNeeded, slotKwh, new Set());
+      if (sel.lastTs) readyByIso = new Date(sel.lastTs + SLOT_MIN * 60_000).toISOString();
+      const fut = [...sel.set].filter(t => t >= now - SLOT_MIN * 60_000);
+      if (fut.length) nextChargeIso = new Date(Math.min(...fut)).toISOString();
+
+      if (sustainedOk) { want = true; amps = Math.max(minA, surplusA); tier = 'overschot'; decision = 'charge_surplus'; reason = `verplicht via gratis overschot @ ${amps}A`; }
+      else if (now > dlMs) { want = true; amps = maxA; decision = 'past_deadline'; reason = `deadline voorbij, SoC ${soc}% < ${mandatory}% — doorladen`; }
+      else if (!cur) { want = true; amps = maxA; decision = 'no_prices'; reason = 'geen prijs — laden'; }
+      else if (sel.set.has(cur.t)) { want = true; amps = maxA; tier = 'verplicht'; decision = 'charge_mandatory'; reason = `goedkoop uur €${curPrice?.toFixed(3) ?? '?'} → verplicht laden`; }
+      else { want = false; decision = 'wait_cheaper'; reason = `wacht op overschot, anders goedkoop uur ~${readyByIso ? this.app.localTime(new Date(readyByIso)) : '?'}`; }
+    }
     else {
-      const grid   = await this._readGridW();                     // import +, export −
-      const teslaW = await this._readChargePowerW();              // huidige EV-laadvermogen
-      const availableW = teslaW - grid - buffer;                  // zero-export-doel
-      const maxW = maxA * phases * V, minW = minA * phases * V;
-      const desiredW = Math.max(0, Math.min(maxW, availableW));
-      const desiredA = Math.floor(desiredW / (phases * V));
-      const actual = (await this._readActual()).charging === true;
-
-      if (availableW >= minW) { if (!this._surplusSince) this._surplusSince = now; } else { this._surplusSince = 0; }
-      const sustainedOk = this._surplusSince && (now - this._surplusSince) >= startMin * 60_000;
-
+      // OPPORTUNISTISCH deel (doel→plafond): UITSLUITEND op zonne-overschot.
+      cap = ceiling;
       if (actual) {
-        const onLongEnough = (now - (this._chargeStartedTs || 0)) >= minOnMs;
-        if (desiredA < minA) {
+        const onLong = (now - (this._chargeStartedTs || 0)) >= minOnMs;
+        if (surplusA < minA) {
           if (!this._belowSince) this._belowSince = now;
           const belowLong = (now - this._belowSince) >= stopMin * 60_000;
-          if (onLongEnough && belowLong) { want = false; decision = 'surplus_stop'; reason = 'overschot weg'; }
+          if (onLong && belowLong) { want = false; decision = 'surplus_stop'; reason = 'overschot weg'; }
           else { want = true; amps = minA; decision = 'surplus_hold'; reason = 'kort dal — op minimum'; }
-        } else {
-          this._belowSince = 0; want = true; amps = desiredA; decision = 'surplus_follow';
-          reason = `volgt overschot @ ${desiredA}A (${Math.round(desiredW)}W)`;
-        }
+        } else { this._belowSince = 0; want = true; amps = surplusA; tier = 'overschot'; decision = 'surplus_follow'; reason = `volgt overschot @ ${amps}A`; }
       } else {
-        const offLongEnough = (now - (this._chargeStoppedTs || 0)) >= minOffMs;
-        if (sustainedOk && offLongEnough) { want = true; amps = Math.max(minA, desiredA); decision = 'surplus_start'; reason = `aanhoudend overschot → start @ ${amps}A`; }
-        else { want = false; decision = 'surplus_wait'; reason = sustainedOk ? 'min-uit-tijd actief' : 'wacht op aanhoudend overschot'; }
+        const offLong = (now - (this._chargeStoppedTs || 0)) >= minOffMs;
+        if (sustainedOk && offLong) { want = true; amps = Math.max(minA, surplusA); tier = 'overschot'; decision = 'surplus_start'; reason = `overschot → start @ ${amps}A`; }
+        else { want = false; decision = 'surplus_wait'; reason = 'wacht op zon-overschot (boven doel, geen netinkoop)'; }
       }
     }
 
-    // Sturen — reconcile naar 'want', met backoff + wake.
-    // Wake (≈2 ct) als de auto slaapt EN we een toestand-wissel nodig hebben:
-    //   • STARTEN bij aanhoudend overschot, of
-    //   • STOPPEN terwijl de auto slaapt maar tóch laadt (anders laadt hij door
-    //     uit het net — dat kost ~€1/uur, dus de wake is het ruim waard).
-    if (connected && soc != null && live) {
-      const actual    = (await this._readActual()).charging === true;
-      const ampChange = want && Math.abs((this._lastAmps ?? -99) - Math.round(amps)) >= 2;  // hysterese 2A
+    // Sturen — reconcile naar 'want' met backoff + wake (start én stop kunnen
+    // een slapende auto vereisen; cap = laadlimiet zodat de auto zelf stopt).
+    let commanded = null, verify = null;
+    if (connected && soc != null && live && decision !== 'skip_no_soc') {
+      const ampChange = want && Math.abs((this._lastAmps ?? -99) - Math.round(amps)) >= 2;
       const mismatch  = (actual !== want) || ampChange;
       const wishChanged = this._sLastWant !== want;
       const lastFailed  = !!this._lastDriveError;
@@ -529,14 +555,11 @@ class TeslaScheduler {
 
       if (mismatch && due) {
         this._sStreak = wishChanged ? 1 : streak + 1;
-        // Wake bij slapende auto wanneer een echte start/stop nodig is (niet voor
-        // louter amps), of na een mislukte poging; niet meer na opgeven.
-        const stateChange = actual !== want;
-        if (!givenUp && stateChange) {
+        if (!givenUp && (actual !== want)) {
           const cs = await this._carState();
           if (cs && cs !== 'online') { await this._wake(); verify = `wake#${this._sStreak}`; }
         }
-        const ok = await this._drive(want, ceiling, want ? amps : undefined);
+        const ok = await this._drive(want, cap, want ? amps : undefined);
         if (ok) {
           commanded = want ? `start@${Math.round(amps)}A` : 'stop';
           if (want && !actual) this._chargeStartedTs = now;
@@ -544,23 +567,35 @@ class TeslaScheduler {
         }
         this._sLastWant = want; this._sLastTs = Date.now(); this._bumpCmd();
         if (this._sStreak === MAX_DRIVE_ATTEMPTS) {
-          this.app.notifications?.send(`⚠️ Tesla volgt het overschot-${want ? 'start' : 'stop'}-commando niet (${this._lastDriveError || '?'}) — controleer de auto.`);
+          this.app.notifications?.send(`⚠️ Tesla volgt het ${want ? 'start' : 'stop'}-commando niet (${this._lastDriveError || '?'}) — controleer de auto.`);
         }
       } else if (!mismatch) {
         this._sStreak = 0; this._lastDriveError = null;
       }
     }
 
+    const tsLocal = this.app.localTime();
     const rec = {
-      ts: new Date().toISOString(), ts_local: this.app.localTime(), mode: 'surplus', sturing: this._mode(),
-      connected, soc, decision, reason, charge_now: want, amps: Math.round(amps),
-      commanded, verify, drive_error: this._lastDriveError || null, cmd_count_today: this._cmdCount,
+      ts: new Date().toISOString(), ts_local: tsLocal, mode: 'combi', sturing: this._mode(),
+      connected, soc, target_pct: mandatory, ceiling_pct: ceiling, tier,
+      decision, reason, charge_now: want, amps: Math.round(amps),
+      kwh_needed: +kwhNeeded.toFixed(2),
+      ready_by_local: readyByIso ? this.app.localTime(new Date(readyByIso)) : null,
+      next_charge_local: nextChargeIso ? this.app.localTime(new Date(nextChargeIso)) : null,
+      current_price_eur: curPrice, commanded, verify,
+      drive_error: this._lastDriveError || null, cmd_count_today: this._cmdCount,
     };
-    this._last = { decision, reason, charge_now: want, amps: Math.round(amps), ceiling_pct: ceiling, soc, connected, mode: this._mode() };
+    this._last = {
+      decision, reason, charge_now: want, amps: Math.round(amps), tier,
+      target_pct: mandatory, ceiling_pct: ceiling, soc, connected,
+      kwh_needed: rec.kwh_needed, ready_by_local: rec.ready_by_local,
+      next_charge_local: rec.next_charge_local, current_price_eur: curPrice,
+      mode: this._mode(), updated_local: tsLocal,
+    };
     this._ring.push(rec);
     if (this._ring.length > RING_MAX) this._ring.shift();
     this._appendJsonl(rec);
-    this.app.log(`[TeslaSched] surplus ${decision}${commanded ? ` → ${live ? 'LIVE' : 'DRYRUN'} ${commanded}` : ''}${verify ? ` [${verify}]` : ''} | SoC ${soc ?? '?'}% | ${reason}`);
+    this.app.log(`[TeslaSched] combi ${decision}${commanded ? ` → ${live ? 'LIVE' : 'DRYRUN'} ${commanded}` : ''}${verify ? ` [${verify}]` : ''} | SoC ${soc ?? '?'}%→${mandatory}%(plafond ${ceiling}%) | ${reason}`);
   }
 
   /** Grid-vermogen (P1): import +, export −. */
