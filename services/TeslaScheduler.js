@@ -254,6 +254,7 @@ class TeslaScheduler {
     let kwhNeeded = 0;
     let readyByIso = null;     // klaar-tijd standaard-doel
     let ceilReadyIso = null;   // klaar-tijd plafond
+    let nextChargeIso = null;  // eerstvolgend gepland laadmoment
     let selectedCount = 0;
     let tier = null;
 
@@ -311,6 +312,9 @@ class TeslaScheduler {
       if (mandLast) readyByIso = new Date(mandLast + SLOT_MIN * 60_000).toISOString();
       const unionLast = Math.max(mandLast, oppSet.size ? Math.max(...oppSet) : 0);
       if (unionLast) ceilReadyIso = new Date(unionLast + SLOT_MIN * 60_000).toISOString();
+      // Eerstvolgend gepland laadmoment = vroegste gekozen slot vanaf nu.
+      const future = [...mandSet, ...oppSet].filter(t => t >= now - SLOT_MIN * 60_000);
+      if (future.length) nextChargeIso = new Date(Math.min(...future)).toISOString();
 
       if (now > dlMs && soc < mandatory) {
         // SoC-garantie: deadline voorbij, standaard-doel niet gehaald → doorladen.
@@ -418,6 +422,7 @@ class TeslaScheduler {
       current_price_eur: currentPrice,
       ready_by_local: readyByIso ? this.app.localTime(new Date(readyByIso)) : null,
       ceil_ready_local: ceilReadyIso ? this.app.localTime(new Date(ceilReadyIso)) : null,
+      next_charge_local: nextChargeIso ? this.app.localTime(new Date(nextChargeIso)) : null,
       commanded, verify, drive_error: this._lastDriveError || null, cmd_count_today: this._cmdCount,
     };
     this._last = {
@@ -426,6 +431,7 @@ class TeslaScheduler {
       target_pct: mandatory, ceiling_pct: ceiling,
       kwh_needed: rec.kwh_needed, ready_by_iso: readyByIso,
       ready_by_local: rec.ready_by_local, ceil_ready_local: rec.ceil_ready_local,
+      next_charge_local: rec.next_charge_local,
       mode: rec.mode, current_price_eur: currentPrice,
       updated_local: rec.ts_local,
     };

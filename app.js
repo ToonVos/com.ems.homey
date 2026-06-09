@@ -156,6 +156,8 @@ class EmsApp extends Homey.App {
       max_horizon_h:   EmsApp.MAX_HORIZON_HOURS,
       tesla_soc:       soc,
       tz:              this.homey.clock.getTimezone(),
+      charge_mode:     this.homey.settings.get('ev_charge_mode') || 'solar_only',
+      contract_type:   this.homey.settings.get('contract_type') || 'fixed',
       // Projectie van de prijs-scheduler (klaar-tijd, beslissing, modus).
       scheduler:       sched,
     };
