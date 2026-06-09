@@ -187,12 +187,17 @@ class TeslaScheduler {
     const tesla = this.app.ems?.tesla;
     if (!tesla) return;
 
-    // Alleen actief in laadmodus 'price' — anders beheert Menno's EvController
-    // (zon/vast/uit) de auto en doen wij niets (geen dubbele sturing).
+    // Wij beheren de auto in modus 'price' (prijs, dynamisch contract) of
+    // 'surplus' (zonne-overschot, export vermijden). Anders niets doen.
     const chargeMode = this.homey.settings.get('ev_charge_mode') || 'solar_only';
     const contract   = this.homey.settings.get('contract_type') || 'fixed';
-    // Prijs-scheduler vereist laadmodus 'price' ÉN een dynamisch contract
-    // (bij vast tarief bestaat 'goedkoopste uur' niet).
+
+    if (chargeMode === 'surplus') {
+      const st0 = await tesla.getState();
+      return this._tickSurplus(tesla, st0);
+    }
+
+    // Prijs-scheduler vereist laadmodus 'price' ÉN een dynamisch contract.
     if (chargeMode !== 'price' || contract !== 'dynamic') {
       this._lastSentWant = null;
       this._mismatchStreak = 0;
@@ -435,6 +440,124 @@ class TeslaScheduler {
     );
   }
 
+  // ─── Surplus-modus: amps moduleren om teruglevering te vermijden ────────────
+  // Behoudend (wear-bescherming auto/laadpaal): starten alleen op AANHOUDEND
+  // overschot, ruime min-aan/min-uit-tijden, geen flapperen. Cost-bewust: de
+  // amp-aanpassingen zijn verwaarloosbaar; alleen STARTEN wekt (≈2 ct) als de
+  // auto slaapt — en dat doen we enkel bij aanhoudend overschot. Hergebruikt
+  // Menno's zon-instellingen. Alleen waardevol post-saldering (export ≪ import).
+  async _tickSurplus(tesla, st) {
+    const live = this._isLive();
+    const s = this.homey.settings;
+    const cfg = this.app.ems?.config?.ev || {};
+    const phases  = s.get('ev_phases') ?? cfg.phases ?? 3;
+    const minA    = s.get('ev_min_current_a') ?? 6;
+    const maxA    = s.get('ev_max_current_a') ?? cfg.maxAmps ?? 16;
+    const buffer  = s.get('ev_target_import_w') ?? 100;            // netbuffer (W)
+    const startMin = s.get('ev_start_delay_ticks') ?? 3;          // min aanhoudend (min)
+    const stopMin  = s.get('ev_stop_delay_ticks') ?? 3;
+    const minOnMs  = (s.get('ev_min_on_min') ?? 10) * 60_000;
+    const minOffMs = (s.get('ev_min_off_min') ?? 15) * 60_000;
+    const ceiling  = Math.min(s.get('ev_opportunistic_soc') ?? 85, 100);
+    const V = 230, now = Date.now();
+
+    const connected = st?.connected ?? false;
+    const soc = st?.soc ?? null;
+
+    let decision = 'idle', reason = '', want = false, amps = 0, commanded = null, verify = null;
+
+    if (!connected) { decision = 'skip_disconnected'; reason = 'auto niet verbonden'; this._surplusSince = 0; }
+    else if (soc == null) { decision = 'skip_no_soc'; reason = 'SoC onbekend'; }
+    else if (soc >= ceiling) { decision = 'at_target'; reason = `SoC ${soc}% ≥ plafond ${ceiling}%`; this._surplusSince = 0; }
+    else {
+      const grid   = await this._readGridW();                     // import +, export −
+      const teslaW = await this._readChargePowerW();              // huidige EV-laadvermogen
+      const availableW = teslaW - grid - buffer;                  // zero-export-doel
+      const maxW = maxA * phases * V, minW = minA * phases * V;
+      const desiredW = Math.max(0, Math.min(maxW, availableW));
+      const desiredA = Math.floor(desiredW / (phases * V));
+      const actual = (await this._readActual()).charging === true;
+
+      if (availableW >= minW) { if (!this._surplusSince) this._surplusSince = now; } else { this._surplusSince = 0; }
+      const sustainedOk = this._surplusSince && (now - this._surplusSince) >= startMin * 60_000;
+
+      if (actual) {
+        const onLongEnough = (now - (this._chargeStartedTs || 0)) >= minOnMs;
+        if (desiredA < minA) {
+          if (!this._belowSince) this._belowSince = now;
+          const belowLong = (now - this._belowSince) >= stopMin * 60_000;
+          if (onLongEnough && belowLong) { want = false; decision = 'surplus_stop'; reason = 'overschot weg'; }
+          else { want = true; amps = minA; decision = 'surplus_hold'; reason = 'kort dal — op minimum'; }
+        } else {
+          this._belowSince = 0; want = true; amps = desiredA; decision = 'surplus_follow';
+          reason = `volgt overschot @ ${desiredA}A (${Math.round(desiredW)}W)`;
+        }
+      } else {
+        const offLongEnough = (now - (this._chargeStoppedTs || 0)) >= minOffMs;
+        if (sustainedOk && offLongEnough) { want = true; amps = Math.max(minA, desiredA); decision = 'surplus_start'; reason = `aanhoudend overschot → start @ ${amps}A`; }
+        else { want = false; decision = 'surplus_wait'; reason = sustainedOk ? 'min-uit-tijd actief' : 'wacht op aanhoudend overschot'; }
+      }
+    }
+
+    // Sturen (alleen bij wijziging). Wake (≈2 ct) alleen om te STARTEN bij
+    // aanhoudend overschot terwijl de auto slaapt — stoppen hoeft nooit te wekken.
+    if (connected && soc != null && live) {
+      const actual = (await this._readActual()).charging === true;
+      const ampChange = want && this._lastAmps !== Math.round(amps);
+      if (actual !== want || ampChange) {
+        if (want && !actual) {
+          const cs = await this._carState();
+          if (cs && cs !== 'online') { await this._wake(); verify = 'wake'; }
+        }
+        const ok = await this._drive(want, ceiling, want ? amps : undefined);
+        if (ok) {
+          commanded = want ? `start@${Math.round(amps)}A` : 'stop';
+          this._bumpCmd();
+          if (want && !actual) this._chargeStartedTs = now;
+          if (!want && actual) this._chargeStoppedTs = now;
+        }
+      }
+    }
+
+    const rec = {
+      ts: new Date().toISOString(), ts_local: this.app.localTime(), mode: 'surplus', sturing: this._mode(),
+      connected, soc, decision, reason, charge_now: want, amps: Math.round(amps),
+      commanded, verify, drive_error: this._lastDriveError || null, cmd_count_today: this._cmdCount,
+    };
+    this._last = { decision, reason, charge_now: want, amps: Math.round(amps), ceiling_pct: ceiling, soc, connected, mode: this._mode() };
+    this._ring.push(rec);
+    if (this._ring.length > RING_MAX) this._ring.shift();
+    this._appendJsonl(rec);
+    this.app.log(`[TeslaSched] surplus ${decision}${commanded ? ` → ${live ? 'LIVE' : 'DRYRUN'} ${commanded}` : ''}${verify ? ` [${verify}]` : ''} | SoC ${soc ?? '?'}% | ${reason}`);
+  }
+
+  /** Grid-vermogen (P1): import +, export −. */
+  async _readGridW() {
+    try {
+      const d = this.homey.settings.get('decisionlog_devices') || {};
+      const dev = await this.app.getDevice(d.p1 || 'ec398f63-5125-49d2-95aa-94b822d055b6');
+      const v = dev?.capabilitiesObj?.measure_power?.value;
+      return typeof v === 'number' ? v : 0;
+    } catch (_) { return 0; }
+  }
+
+  /** Huidig EV-laadvermogen (W) van de Tesla-batterij. */
+  async _readChargePowerW() {
+    try {
+      const dev = await this.app.getDevice(this._teslaBatId());
+      const kw = dev?.capabilitiesObj?.measure_charge_power?.value;
+      return typeof kw === 'number' ? kw * 1000 : 0;
+    } catch (_) { return 0; }
+  }
+
+  /** Auto-staat (online/asleep/…) — gratis check vóór een (dure) wake. */
+  async _carState() {
+    try {
+      const dev = await this.app.getDevice(this._teslaCarId());
+      return dev?.capabilitiesObj?.car_state?.value ?? null;
+    } catch (_) { return null; }
+  }
+
   /** Goedkoopste slots tot kwhNeeded gedekt is (excl. excludeSet). */
   _pickCheapest(slots, kwhNeeded, slotKwh, excludeSet) {
     const set = new Set();
@@ -499,9 +622,8 @@ class TeslaScheduler {
   // Stuurt de Tesla RECHTSTREEKS via de device-flow-acties van de Tesla-app
   // (geen door de gebruiker gekoppelde flow nodig). charge_limit 50–100,
   // charge_current 0–32A, charging_on {start,stop}.
-  async _drive(wantCharge, capPct) {
+  async _drive(wantCharge, capPct, ampsOverride) {
     const dev = this._teslaBatId();
-    const maxA = this._params().maxA;
     try {
       // Hoofd-stop: laadlimiet = capPct ("laad tot X%"). De auto stopt hier zelf,
       // ook slapend ladend — dus geen los stop-commando naar een slapende auto nodig.
@@ -511,9 +633,10 @@ class TeslaScheduler {
       // Timing: start/stop via de settable capability `charging_on` (betrouwbaar).
       await this.app.setDeviceCapability(dev, 'charging_on', !!wantCharge);
 
-      // Amps best-effort op vol vermogen bij starten (mag falen zonder gevolgen).
+      // Amps zetten bij laden (vol vermogen, of opgegeven surplus-amps).
       if (wantCharge) {
-        const amps = Math.max(1, Math.min(32, Math.round(maxA)));
+        const want = ampsOverride != null ? ampsOverride : this._params().maxA;
+        const amps = Math.max(1, Math.min(32, Math.round(want)));
         if (this._lastAmps !== amps) { if (await this._tryAction(dev, 'charge_current', { current: amps })) this._lastAmps = amps; }
       }
       this._lastDriveError = null;

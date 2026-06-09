@@ -392,13 +392,17 @@
       // Prijs-modus: toon prijs-infoblok + sturing, verberg alle zon-/algemene
       // strategie-velden (die gelden niet in prijs-modus).
       var isPrice = (mode === 'price');
+      var isSurplus = (mode === 'surplus');
       var price = document.getElementById('ev_grp_price');
       var solar = document.getElementById('ev_grp_solar');
+      // Prijs-blok alleen bij prijs-modus. Zon-instellingen tonen bij zon-modi én
+      // bij overschot-modus (die hergebruikt ze: min/max stroom, netbuffer,
+      // start/stop-vertraging, min aan/uit-tijd).
       if (price) price.style.display = isPrice ? 'block' : 'none';
       if (solar) solar.style.display = isPrice ? 'none'  : 'block';
-      // EMS Gedrag (overschot-drempel) is zon-strategie → niet relevant in prijs-modus.
+      // EMS Gedrag (overschot-drempel) niet relevant in prijs- of overschot-modus.
       var gedrag = document.getElementById('ems-gedrag-card');
-      if (gedrag) gedrag.style.display = isPrice ? 'none' : 'block';
+      if (gedrag) gedrag.style.display = (isPrice || isSurplus) ? 'none' : 'block';
     }
 
     function updatePvTotal() {
@@ -724,6 +728,7 @@
           <label>Laadmodus</label>
           <select id="ev_charge_mode">
             <option value="price">💶 Prijs — goedkoopste uren tot deadline (pre-saldering / dynamisch)</option>
+            <option value="surplus">☀️💶 Overschot — amps moduleren om teruglevering te vermijden (post-saldering)</option>
             <option value="pv">☀️ Solar only — puur zonne-overschot, nooit netladen</option>
             <option value="solar_only">☀️+ Solar+ — zonne-overschot met 5A minimum (200W buffer)</option>
             <option value="solar_and_grid">☀️🔌 Zon + net — Solar+ met nachtladen bij geplande rit</option>
