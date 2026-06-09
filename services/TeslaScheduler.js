@@ -224,18 +224,21 @@ class TeslaScheduler {
     const effRate = this._effectiveRateKw(powerKw);   // kW
     const slotKwh = effRate * SLOT_H;
 
-    // 2. Override of standaard-doel + opportunistisch plafond
+    // 2. Override of standaard-doel + opportunistisch plafond.
+    //    Verre deadline (buiten 168u) → vakantie-hold: behandel als standaard-doel
+    //    tot de deadline het venster binnenkomt (ARCHITECTURE v5.7).
     const ov = await this.app.getTeslaOverride();
-    const mandatory  = ov.target_pct;                 // override-doel of standaard-doel
-    const deadline   = new Date(ov.deadline_iso);
+    const effActive  = ov.active && !ov.far_deadline;
+    const mandatory  = effActive ? ov.target_pct : ov.auto_target_pct;
+    const deadline   = new Date(effActive ? ov.deadline_iso : ov.auto_deadline);
     // Opportunistisch plafond, hard afgetopt op 85% (bovenkant voor de accu).
     const oppCeiling = Math.min(this.homey.settings.get('ev_opportunistic_soc') ?? 85, 85);
     // Bij actieve override geen opportunistisch extra: plafond = het gekozen doel.
-    const ceiling = ov.active ? mandatory : Math.max(mandatory, oppCeiling);
+    const ceiling = effActive ? mandatory : Math.max(mandatory, oppCeiling);
 
     // Wekelijkse opportunistische top-up: zodra het plafond (≈) bereikt is, 7
     // dagen op slot zodat dit hooguit 1× per week gebeurt.
-    if (!ov.active && soc != null && soc >= oppCeiling - 1) {
+    if (!effActive && soc != null && soc >= oppCeiling - 1) {
       const lastOpp = this.homey.settings.get('tesla_opp_last_ts') || 0;
       if ((Date.now() - lastOpp) >= WEEK_MS) this.homey.settings.set('tesla_opp_last_ts', Date.now());
     }
@@ -478,11 +481,13 @@ class TeslaScheduler {
     const connected = st?.connected ?? false;
     const soc = st?.soc ?? null;
 
-    // Doelen: verplicht doel + deadline (override of standaard), plafond.
+    // Doelen: verplicht doel + deadline. Verre deadline → vakantie-hold (val terug
+    // op standaard-doel tot de deadline het venster binnenkomt; ARCHITECTURE v5.7).
     const ov = await this.app.getTeslaOverride();
-    const mandatory = ov.target_pct;
-    const dlMs = new Date(ov.deadline_iso).getTime();
-    const ceiling = ov.active ? mandatory : Math.min(s.get('ev_opportunistic_soc') ?? 85, 100);
+    const effActive = ov.active && !ov.far_deadline;
+    const mandatory = effActive ? ov.target_pct : ov.auto_target_pct;
+    const dlMs = new Date(effActive ? ov.deadline_iso : ov.auto_deadline).getTime();
+    const ceiling = effActive ? mandatory : Math.min(s.get('ev_opportunistic_soc') ?? 85, 100);
 
     // Overschot nu (zero-export): beschikbaar = huidig EV-vermogen − grid − buffer.
     const grid   = await this._readGridW();

@@ -146,8 +146,13 @@ class EmsApp extends Homey.App {
     // UI leidend: de standaard doel-SoC komt uit ev_default_soc (instellingen),
     // val terug op AUTO_TARGET_PCT (60) als die niet gezet is.
     const autoTarget = this.homey.settings.get('ev_default_soc') ?? EmsApp.AUTO_TARGET_PCT;
+    // Verre deadline (buiten de 168u-horizon): vakantie-hold tot hij in het venster
+    // komt — dan pas de override-planning (ARCHITECTURE v5.7).
+    const horizonMs = EmsApp.MAX_HORIZON_HOURS * 3600 * 1000;
+    const farDeadline = active && (new Date(deadline).getTime() - Date.now() > horizonMs);
     return {
       active,
+      far_deadline:    farDeadline,
       target_pct:      active ? pct : autoTarget,
       deadline_iso:    active ? deadline : defDeadline,
       auto_target_pct: autoTarget,
@@ -172,10 +177,9 @@ class EmsApp extends Homey.App {
     }
     const dl = new Date(deadline_iso);
     if (isNaN(dl.getTime())) throw new Error(`Ongeldige deadline: ${deadline_iso}`);
-    const horizonMs = EmsApp.MAX_HORIZON_HOURS * 3600 * 1000;
-    if (dl.getTime() - Date.now() > horizonMs) {
-      throw new Error(`Deadline > ${EmsApp.MAX_HORIZON_HOURS}u vooruit valt buiten de prijs-horizon`);
-    }
+    // Een verre deadline (weken/maanden) is toegestaan: buiten de 168u-horizon
+    // geldt vakantie-hold op aging-vriendelijk niveau; zodra de deadline ≤168u
+    // nadert schopt de normale planning aan (ARCHITECTURE v5.7). Geen afwijzing.
     this.homey.settings.set('tesla_target_pct', pct);
     this.homey.settings.set('tesla_deadline_iso', dl.toISOString());
     this.log(`[Override] Tesla-doel ${pct}% tegen ${this.localTime(dl)}`);
