@@ -878,6 +878,10 @@
     "getTeslaScheduler": {
       "method": "GET",
       "path": "/getTeslaScheduler"
+    },
+    "getUserdataFile": {
+      "method": "GET",
+      "path": "/getUserdataFile"
     }
   }
 }

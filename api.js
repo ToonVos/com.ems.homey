@@ -150,6 +150,26 @@ module.exports = {
     return homey.app.teslaScheduler ? homey.app.teslaScheduler.getRecent(300) : [];
   },
 
+  // Diagnose: lijst /userdata-logbestanden, of tail een specifiek bestand.
+  async getUserdataFile({ homey, query }) {
+    const fs = require('fs'); const path = require('path');
+    const dir = '/userdata';
+    try {
+      if (!query || !query.name) {
+        return {
+          files: fs.readdirSync(dir).map(f => {
+            const st = fs.statSync(path.join(dir, f));
+            return { name: f, size: st.size, mtime: st.mtime };
+          }),
+        };
+      }
+      const txt   = fs.readFileSync(path.join(dir, query.name), 'utf8').trim();
+      const lines = txt ? txt.split('\n') : [];
+      const n     = Number(query.tail || 300);
+      return { name: query.name, total: lines.length, lines: lines.slice(-n) };
+    } catch (e) { return { error: e.message }; }
+  },
+
   async getEvDiag({ homey }) {
     try {
       const ems   = homey.app.ems;
