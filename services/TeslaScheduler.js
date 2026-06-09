@@ -316,7 +316,13 @@ class TeslaScheduler {
       const future = [...mandSet, ...oppSet].filter(t => t >= now - SLOT_MIN * 60_000);
       if (future.length) nextChargeIso = new Date(Math.min(...future)).toISOString();
 
-      if (now > dlMs && soc < mandatory) {
+      if (kwhNeeded <= 0) {
+        // Niets te laden: boven het doel, en opportunistisch al gehaald/op slot.
+        chargeNow = false;
+        decision = 'idle';
+        const opp = (now - (this.homey.settings.get('tesla_opp_last_ts') || 0)) < WEEK_MS;
+        reason = `SoC ${soc}% boven doel ${mandatory}% — niets gepland${opp ? ' (opportunistisch deze week gehaald)' : ''}`;
+      } else if (now > dlMs && soc < mandatory) {
         // SoC-garantie: deadline voorbij, standaard-doel niet gehaald → doorladen.
         chargeNow = true;
         decision = 'past_deadline';

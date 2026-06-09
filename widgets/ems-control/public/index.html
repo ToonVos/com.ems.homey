@@ -2,7 +2,7 @@
 <head>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { height: 100%; }
+    html { height: auto; }
     body {
       font-family: var(--homey-font-family, -apple-system, sans-serif);
       background: transparent;
@@ -175,6 +175,7 @@
       if (sc.decision === 'panic_charge')           { dot = 'dot-on';   icon = '🪫'; head = 'Noodladen (onder bodem)'; }
       else if (sc.charge_now)                        { dot = 'dot-on';   icon = '⚡'; head = surplus ? `Laadt op overschot${sc.amps ? ` @ ${sc.amps}A` : ''}` : `Laadt nu${sc.tier ? ` (${sc.tier})` : ''}`; }
       else if (sc.decision === 'at_target')          { dot = 'dot-on';   icon = '✓';  head = `Op plafond (${sc.ceiling_pct}%)`; }
+      else if (sc.decision === 'idle')               { dot = 'dot-on';   icon = '✓';  head = `Boven doel (${sc.target_pct}%) — niets gepland`; }
       else if (sc.decision === 'skip_disconnected')  { dot = 'dot-off';  icon = '🔌'; head = 'Auto niet verbonden'; }
       else if (sc.decision === 'skip_no_soc')        { dot = 'dot-off';  icon = '…';  head = 'SoC onbekend'; }
       else if (sc.decision === 'inactive' || sc.decision === 'mode_not_price') { dot='dot-off'; icon='○'; head='Scheduler inactief'; }
