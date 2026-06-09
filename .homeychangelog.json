@@ -10,5 +10,9 @@
   "1.7.0": {
     "en": "Robust charge control: charge-limit ('charge to X%') as primary stop so the car self-stops even while asleep; reconcile loop with wake-aware retry (could_not_wake_buses) and credit-safe backoff; car-state checked free before waking. Combined post-saldering charge mode (mandatory via cheapest hours/free surplus, top-up only on solar surplus). Widget: richer status incl. next charge time + auto-height. Timeline notifications grouped and configurable (all off by default).",
     "nl": "Robuuste laadsturing: laadlimiet ('laad tot X%') als hoofd-stop zodat de auto zelf stopt, ook slapend; reconcile-lus met wake-bewuste herproef (could_not_wake_buses) en credit-veilige backoff; auto-staat gratis gecheckt vóór een wake. Gecombineerde post-saldering-laadmodus (verplicht via goedkoopste uren/gratis overschot, top-up alleen op zonne-overschot). Widget: rijkere status incl. eerstvolgend laadmoment + auto-hoogte. Tijdlijn-meldingen gegroepeerd en instelbaar (standaard alles uit)."
+  },
+  "1.7.1": {
+    "en": "Far departure dates allowed: beyond 168h the car holds an aging-friendly 'Spaarstand' (eco level, default 55%, no opportunistic top-up) until the deadline comes within a week, then normal planning. Widget shows this in a single status panel + readable text. Aging-friendly SoC levels per NCA research. Log retention 30 days.",
+    "nl": "Verre vertrekdatums toegestaan: voorbij 168u houdt de auto een accu-vriendelijke 'Spaarstand' aan (default 55%, geen opportunistische top-up) tot de deadline binnen een week komt, dan normale planning. Widget toont dit in één status-paneel + leesbare tekst. Accu-vriendelijke SoC-niveaus o.b.v. NCA-onderzoek. Log-retentie 30 dagen."
   }
 }

@@ -83,12 +83,26 @@ rekent hij met het berekende vermogen (amps × fasen × 230V).
 | `ev_default_deadline` | 07:00 | standaard klaar-tijd |
 | `ev_floor_soc` | 20 | bodem/panic — hieronder direct laden |
 | `ev_opportunistic_soc` | 85 | opportunistisch plafond (max 85), 1×/week |
+| `ev_vacation_soc` | 55 | **Spaarstand**: rustniveau bij verre deadline / lang stilstaan |
 | `ev_battery_health` | aan | bandgewijze timing voor hoge SoC |
 | `ev_max_current_a` | 16 | laadvermogen-plafond |
 | `tesla_scheduler_mode` | live | `live` stuurt echt, `dryrun` rekent/logt |
 | `day_ahead_provider` | — | `energyzero` aanbevolen |
+| `debug_retention_days` | 30 | hoeveel dagen logs bewaard worden |
 
 Doel-% en deadline overschrijf je live via de **dashboard-tegel "EMS Tesla-doel"**.
+
+### Verre deadline → Spaarstand (ARCHITECTURE v5.7)
+Een deadline mag willekeurig ver vooruit. Zolang die **>168u** weg is, houdt de scheduler
+de **Spaarstand** aan (`ev_vacation_soc`, default 55% — accu-vriendelijk, géén
+opportunistische top-up). Zodra de deadline **≤168u** nadert, schopt de normale planning
+aan en laadt hij in de goedkoopste uren naar het gekozen doel.
+
+### Accu-vriendelijke SoC-niveaus (onderbouwd, NCA-pack)
+Kalender-veroudering domineert en loopt sterk op boven ~55% SoC; ≤55% remt slijtage het
+sterkst, <20% is een kritieke ondergrens. Vertaald naar de app:
+**20% bodem · 55% spaarstand · 60% dagelijks · 85% kort/1×-week · laatste 10% pas vlak
+vóór vertrek.**
 
 ## Debug-/tuning-laag (DecisionLog)
 
