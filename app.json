@@ -874,6 +874,10 @@
     "getTuningReport": {
       "method": "GET",
       "path": "/getTuningReport"
+    },
+    "getTeslaScheduler": {
+      "method": "GET",
+      "path": "/getTeslaScheduler"
     }
   }
 }

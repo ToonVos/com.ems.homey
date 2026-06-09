@@ -142,6 +142,14 @@ module.exports = {
     }
   },
 
+  async getTuningReport({ homey }) {
+    return homey.app.decisionLog ? homey.app.decisionLog.getWeekSummary() : null;
+  },
+
+  async getTeslaScheduler({ homey }) {
+    return homey.app.teslaScheduler ? homey.app.teslaScheduler.getRecent(300) : [];
+  },
+
   async getEvDiag({ homey }) {
     try {
       const ems   = homey.app.ems;

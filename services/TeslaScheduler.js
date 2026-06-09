@@ -38,8 +38,10 @@ const SLOT_H       = SLOT_MIN / 60;
 const VOLTAGE      = 230;
 const EFFICIENCY   = 0.91;             // on-board charger @ vol vermogen (~16A)
 const WEEK_MS      = 7 * 24 * 60 * 60 * 1000;  // opportunistisch hooguit 1×/week
-const VERIFY_MS    = 3 * 60 * 1000;    // 3 min na commando: laadt/stopt hij echt?
-const MAX_WAKE_RETRIES = 2;            // max keer wakker maken + opnieuw sturen
+const RECONCILE_MS = 5 * 60 * 1000;    // min. tussen herhaalde bijstuur-commando's
+const FAIL_RETRY_MS = 90 * 1000;       // sneller opnieuw na een mislukte sturing (met wake)
+const GIVEUP_MS     = 30 * 60 * 1000;  // na opgeven: lang terug (geen wake-credits verbranden)
+const MAX_DRIVE_ATTEMPTS = 5;          // na zoveel mislukte pogingen: melden + backoff
 
 class TeslaScheduler {
 
@@ -51,7 +53,9 @@ class TeslaScheduler {
     this._cmdDay = null;
     this._cmdCount = 0;
     this._last = null;             // laatste beslissing (voor getStatus/projectie)
-    this._lastChargingCmd = null;  // true=liet laden, false=liet stoppen (idle-skip)
+    this._lastSentWant = null;     // laatst gestuurde wens (true=laden, false=stop)
+    this._lastSentTs = 0;          // wanneer voor het laatst gestuurd (cooldown)
+    this._mismatchStreak = 0;      // opeenvolgende cycli werkelijk≠gewenst (wake-escalatie)
   }
 
   async init() {
@@ -149,26 +153,29 @@ class TeslaScheduler {
     return d.tesla || '37cdaf85-28d4-41ca-95fb-7591764aa597';
   }
 
-  /** Leest RECHTSTREEKS of de auto laadt (vers, omzeilt adapter-cache). null=onbekend. */
-  async _readActualCharging() {
+  /** Leest RECHTSTREEKS {charging, limit} (vers, omzeilt adapter-cache). null=onbekend. */
+  async _readActual() {
     try {
       const dev = await this.app.getDevice(this._teslaBatId());
       const c = dev?.capabilitiesObj || {};
-      const power = c.measure_charge_power?.value;
-      if (power != null) return power > 0.1;                 // kW
+      const power  = c.measure_charge_power?.value;
       const stateC = c.charging_state?.value;
-      if (stateC != null) return String(stateC).toLowerCase() === 'charging';
-      return null;
-    } catch (_) { return null; }
+      let charging = null;
+      if (power != null) charging = power > 0.1;             // kW
+      else if (stateC != null) charging = String(stateC).toLowerCase() === 'charging';
+      const limit = (typeof c.measure_charge_limit_soc?.value === 'number')
+        ? c.measure_charge_limit_soc.value : null;
+      return { charging, limit };
+    } catch (_) { return { charging: null, limit: null }; }
   }
 
-  /** Maakt de auto wakker en stuurt het gewenste commando opnieuw. */
-  async _wakeAndRetry(want, maxA, targetPct) {
+  /** Maakt de auto wakker (best-effort) zodat een volgend commando aankomt. */
+  async _wake() {
     try {
       await this.app.runDeviceAction(this._teslaCarId(), 'car_wake_up', { wait: 'wait' });
-    } catch (e) { this.app.error('[TeslaSched] wake-fout:', e.message); }
-    this._lastAmps = null; this._lastLimit = null;          // forceer her-sturing
-    await this._drive(null, want, maxA, targetPct);
+      this._lastAmps = null; this._lastLimit = null;        // forceer her-sturing van amps/limiet
+      this._bumpCmd();
+    } catch (e) { this.app.log(`[TeslaSched] wake niet gelukt (${e?.message || e})`); }
   }
 
   async _tickSafe() {
@@ -187,8 +194,8 @@ class TeslaScheduler {
     // Prijs-scheduler vereist laadmodus 'price' ÉN een dynamisch contract
     // (bij vast tarief bestaat 'goedkoopste uur' niet).
     if (chargeMode !== 'price' || contract !== 'dynamic') {
-      this._lastChargingCmd = null;
-      this._pending = null;
+      this._lastSentWant = null;
+      this._mismatchStreak = 0;
       const why = chargeMode !== 'price'
         ? `laadmodus '${chargeMode}'`
         : 'vast tarief (geen uurprijzen)';
@@ -322,57 +329,70 @@ class TeslaScheduler {
       }
     }
 
-    // 4. Sturing (live) of alleen loggen (dryrun) — idle-skip op ongewijzigde wens
+    // 4. Reconciliatie: stuur tot de WERKELIJKE laadstatus de gewenste volgt.
+    //    Niet alleen op onze eigen toestand-wissel, maar elke cyclus vergelijken —
+    //    zo wordt een auto die uit zichzelf doorlaadt/herstart (of op doel niet
+    //    stopt omdat de auto-limiet hoger staat) alsnog bijgestuurd.
     const live = this._isLive();
-    let commanded = null;
-    if (connected && soc != null && soc < ceiling) {
-      const wantCharge = chargeNow;
-      if (this._lastChargingCmd !== wantCharge) {
-        commanded = wantCharge ? 'start' : 'stop';
-        if (live) {
-          // Laadlimiet = plafond zodat de auto tot het plafond kan; de scheduler
-          // stopt zelf eerder zodra het doel is gehaald of de uren op zijn.
-          const ok = await this._drive(tesla, wantCharge, maxA, ceiling);
-          // Alleen verifiëren als het commando écht verstuurd is — anders geen
-          // zinloze wake-pogingen (bv. bij ontbrekende rechten of netwerkfout).
-          if (ok) this._pending = { want: wantCharge, at: Date.now(), retries: 0 };
-          else    commanded = null;
+    let commanded = null, verify = null;
+    if (connected && soc != null) {
+      const want = chargeNow;                          // false bij wait/at_target, true bij laden/panic
+      const { charging: actual, limit: carLimit } = await this._readActual();
+
+      // Wil laden, maar de auto staat op z'n eigen laadlimiet → kan niet hoger.
+      // Verhoog die best-effort richting het plafond; geen start/wake-spam.
+      const atCarLimit = want && actual === false && carLimit != null && soc >= carLimit;
+
+      const mismatch    = atCarLimit ? false
+        : (actual === null) ? (this._lastSentWant !== want) : (actual !== want);
+      const wishChanged = this._lastSentWant !== want;
+      const lastFailed  = !!this._lastDriveError;      // vorige sturing mislukte (bv. could_not_wake_buses)
+      const streak      = this._mismatchStreak || 0;
+      const givenUp     = streak >= MAX_DRIVE_ATTEMPTS;
+      const sinceLast   = Date.now() - (this._lastSentTs || 0);
+      // Ritme: normaal 5 min; na een mislukte sturing sneller (90s) om te wekken;
+      // na opgeven lang terug (30 min) zodat we geen wake-credits blijven verbranden.
+      const interval    = givenUp ? GIVEUP_MS : (lastFailed ? FAIL_RETRY_MS : RECONCILE_MS);
+      const due         = wishChanged || sinceLast >= interval;
+
+      if (atCarLimit) {
+        // Op auto-eigen limiet: probeer 'm best-effort te verhogen richting plafond.
+        this._mismatchStreak = 0;
+        if (live && ceiling > carLimit && (Date.now() - (this._lastLimitTry || 0)) >= RECONCILE_MS) {
+          await this._tryAction(this._teslaBatId(), 'charge_limit', { limit: Math.min(100, Math.max(50, Math.round(ceiling))) });
+          this._lastLimitTry = Date.now();
+          this._bumpCmd();
         }
-        this._lastChargingCmd = wantCharge;
+        verify = `auto-limiet ${carLimit}%`;
+      } else if (mismatch && due) {
+        this._mismatchStreak = wishChanged ? 1 : streak + 1;
+        commanded = want ? 'start' : 'stop';
+        if (live) {
+          // Wakker maken als de auto het commando-bus niet kon wekken, of bij
+          // herhaalde mismatch — maar niet meer na opgeven (credit-bescherming).
+          const needWake = actual !== null && !givenUp &&
+            (lastFailed || this._mismatchStreak >= 2);
+          if (needWake) { await this._wake(); verify = `wake#${this._mismatchStreak}`; }
+          const ok = await this._drive(tesla, want, maxA, ceiling);
+          if (!ok) commanded = null;
+          if (this._mismatchStreak === MAX_DRIVE_ATTEMPTS) {
+            this.app.notifications?.send(
+              `⚠️ Tesla volgt het ${want ? 'start' : 'stop'}-commando niet (${this._lastDriveError || '?'}). Ik probeer het minder vaak; controleer de auto/Tesla-app.`
+            );
+          }
+        }
+        this._lastSentWant = want;
+        this._lastSentTs   = Date.now();
         this._bumpCmd();
-      } else {
-        // ongewijzigd → niets sturen (idle-skip)
+        if (!verify) verify = `stuur#${this._mismatchStreak}`;
+      } else if (!mismatch) {
+        this._mismatchStreak = 0;
+        this._lastDriveError = null;
+        if (actual !== null) verify = 'ok';            // werkelijk == gewenst
       }
     } else {
-      this._lastChargingCmd = null;  // reset bij niet-verbonden / op doel
-      this._pending = null;
-    }
-
-    // 4b. Verificatie-lus: 3 min na een commando checken of de auto echt
-    // laadt/gestopt is; zo niet → wakker maken + opnieuw sturen (max 2×).
-    let verify = null;
-    if (live && this._pending && connected && (Date.now() - this._pending.at) >= VERIFY_MS) {
-      const actual = await this._readActualCharging();
-      if (actual === null) {
-        verify = 'onbekend';                                  // geen meting → volgende cyclus opnieuw
-        this._pending.at = Date.now();
-      } else if (actual === this._pending.want) {
-        verify = 'ok';
-        this.app.log(`[TeslaSched] geverifieerd: auto ${actual ? 'laadt' : 'laadt niet'} zoals gewenst`);
-        this._pending = null;
-      } else if (this._pending.retries < MAX_WAKE_RETRIES) {
-        this._pending.retries++;
-        verify = `mismatch→wake#${this._pending.retries}`;
-        this.app.log(`[TeslaSched] mismatch (wil ${this._pending.want ? 'laden' : 'stoppen'}, auto ${actual ? 'laadt' : 'laadt niet'}) — wakker maken + opnieuw (#${this._pending.retries})`);
-        await this._wakeAndRetry(this._pending.want, maxA, ceiling);
-        this._pending.at = Date.now();
-        this._bumpCmd();
-      } else {
-        verify = 'opgegeven';
-        this.app.error(`[TeslaSched] commando bleef mislukken na ${MAX_WAKE_RETRIES} wake-pogingen — handmatig controleren`);
-        this.app.notifications?.send('⚠️ Tesla reageert niet op laad-commando — controleer de auto');
-        this._pending = null;
-      }
+      this._lastSentWant = null;
+      this._mismatchStreak = 0;
     }
 
     // 5. Record
@@ -393,7 +413,7 @@ class TeslaScheduler {
       current_price_eur: currentPrice,
       ready_by_local: readyByIso ? this.app.localTime(new Date(readyByIso)) : null,
       ceil_ready_local: ceilReadyIso ? this.app.localTime(new Date(ceilReadyIso)) : null,
-      commanded, verify, cmd_count_today: this._cmdCount,
+      commanded, verify, drive_error: this._lastDriveError || null, cmd_count_today: this._cmdCount,
     };
     this._last = {
       decision, reason, charge_now: chargeNow, tier,
@@ -494,9 +514,11 @@ class TeslaScheduler {
         const amps = Math.max(1, Math.min(32, Math.round(maxA)));
         if (this._lastAmps !== amps) { if (await this._tryAction(dev, 'charge_current', { current: amps })) this._lastAmps = amps; }
       }
+      this._lastDriveError = null;
       return true;
     } catch (err) {
-      this.app.error('[TeslaSched] sturing-fout:', err?.message || String(err));
+      this._lastDriveError = err?.message || String(err);
+      this.app.error('[TeslaSched] sturing-fout:', this._lastDriveError);
       return false;
     }
   }
