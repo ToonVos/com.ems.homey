@@ -63,8 +63,6 @@
     .status { margin-top: 8px; font-size: 12px; opacity: .7; line-height: 1.3; text-align: center; }
     .status.err { color: #ef4444; opacity: .95; }
     .status.ok  { color: #22c55e; opacity: .95; }
-    .farnote { margin-top: 6px; padding: 7px 9px; border-radius: 8px; font-size: 11.5px; line-height: 1.35;
-               background: rgba(59,130,246,.12); color: #3b82f6; }
   </style>
 </head>
 <body>
@@ -99,7 +97,6 @@
   </div>
 
   <div class="status" id="status"></div>
-  <div class="farnote" id="farnote" style="display:none"></div>
 
   <script>
     let state = null;
@@ -157,15 +154,6 @@
       $('deadline').value   = isoToLocalInput(s.deadline_iso, s.tz);
       renderChips();
       renderProj(s);
-
-      // Verre deadline (>7 dagen): geen fout, maar uitleg — vakantie-hold tot 'ie nadert.
-      const fn = $('farnote');
-      if (s.far_deadline) {
-        const d = new Date(s.deadline_iso);
-        const datum = new Intl.DateTimeFormat('nl-NL', { timeZone: s.tz, weekday: 'short', day: 'numeric', month: 'short' }).format(d);
-        fn.textContent = `ℹ️ Doel ${s.target_pct}% gepland voor ${datum}. Tot ~7 dagen ervoor houdt hij ${s.hold_target ?? 55}% aan (accu-vriendelijk); daarna laadt hij in de goedkoopste uren naar ${s.target_pct}%.`;
-        fn.style.display = 'block';
-      } else { fn.style.display = 'none'; }
     }
 
     function hhmm(local) { return local ? String(local).replace(/^.*?(\d{1,2}:\d{2}):\d{2}.*$/, '$1').replace(/:\d\d$/, m => m) : '?'; }
@@ -181,6 +169,19 @@
       const sc = s.scheduler;
       if (!sc) { el.innerHTML = '<div class="pr-row pr-muted">scheduler nog niet gestart…</div>'; return; }
       const surplus = s.charge_mode === 'surplus';
+
+      // Verre deadline → vakantie-hold: toon dit in het status-paneel zelf.
+      if (s.far_deadline) {
+        const d = new Date(s.deadline_iso);
+        const datum = new Intl.DateTimeFormat('nl-NL', { timeZone: s.tz, weekday: 'short', day: 'numeric', month: 'short' }).format(d);
+        const modusF = sc.mode === 'dryrun' ? '🧪 proef' : '🟢 live';
+        el.innerHTML =
+          `<div class="pr-row pr-head"><span class="dot dot-on"></span>🏖️ Vakantie-hold ${s.hold_target ?? 55}%</div>` +
+          `<div class="pr-row">doel ${s.target_pct}% gepland voor ${datum}</div>` +
+          `<div class="pr-row pr-muted">start in de goedkoopste uren ~7 dagen ervoor</div>` +
+          `<div class="pr-row pr-foot">${modusF}${sc.updated_local ? ` · ${shortWhen(sc.updated_local)}` : ''}</div>`;
+        return;
+      }
 
       // 1. Hoofdstatus
       let dot = 'dot-off', icon = '○', head;
