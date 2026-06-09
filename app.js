@@ -153,6 +153,7 @@ class EmsApp extends Homey.App {
     return {
       active,
       far_deadline:    farDeadline,
+      hold_target:     this.homey.settings.get('ev_vacation_soc') ?? 55,
       target_pct:      active ? pct : autoTarget,
       deadline_iso:    active ? deadline : defDeadline,
       auto_target_pct: autoTarget,

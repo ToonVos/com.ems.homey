@@ -163,7 +163,7 @@
       if (s.far_deadline) {
         const d = new Date(s.deadline_iso);
         const datum = new Intl.DateTimeFormat('nl-NL', { timeZone: s.tz, weekday: 'short', day: 'numeric', month: 'short' }).format(d);
-        fn.textContent = `ℹ️ Doel ${s.target_pct}% gepland voor ${datum}. Tot ~7 dagen ervoor houdt hij ${s.auto_target_pct}% aan (accu-vriendelijk); daarna laadt hij in de goedkoopste uren naar ${s.target_pct}%.`;
+        fn.textContent = `ℹ️ Doel ${s.target_pct}% gepland voor ${datum}. Tot ~7 dagen ervoor houdt hij ${s.hold_target ?? 55}% aan (accu-vriendelijk); daarna laadt hij in de goedkoopste uren naar ${s.target_pct}%.`;
         fn.style.display = 'block';
       } else { fn.style.display = 'none'; }
     }

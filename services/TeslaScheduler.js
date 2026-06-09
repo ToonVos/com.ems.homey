@@ -229,12 +229,15 @@ class TeslaScheduler {
     //    tot de deadline het venster binnenkomt (ARCHITECTURE v5.7).
     const ov = await this.app.getTeslaOverride();
     const effActive  = ov.active && !ov.far_deadline;
-    const mandatory  = effActive ? ov.target_pct : ov.auto_target_pct;
+    const vacationSoc = this.homey.settings.get('ev_vacation_soc') ?? 55;   // accu-vriendelijke rust
+    // Verre deadline → vakantie-hold op vacationSoc; anders standaard-doel.
+    const mandatory  = effActive ? ov.target_pct : (ov.far_deadline ? vacationSoc : ov.auto_target_pct);
     const deadline   = new Date(effActive ? ov.deadline_iso : ov.auto_deadline);
     // Opportunistisch plafond, hard afgetopt op 85% (bovenkant voor de accu).
     const oppCeiling = Math.min(this.homey.settings.get('ev_opportunistic_soc') ?? 85, 85);
-    // Bij actieve override geen opportunistisch extra: plafond = het gekozen doel.
-    const ceiling = effActive ? mandatory : Math.max(mandatory, oppCeiling);
+    // Override of vakantie-hold: geen opportunistisch extra (auto staat dan lang
+    // stil → niet naar 85 vullen). Alleen normaal dagelijks gebruik krijgt de top-up.
+    const ceiling = (effActive || ov.far_deadline) ? mandatory : Math.max(mandatory, oppCeiling);
 
     // Wekelijkse opportunistische top-up: zodra het plafond (≈) bereikt is, 7
     // dagen op slot zodat dit hooguit 1× per week gebeurt.
@@ -485,9 +488,11 @@ class TeslaScheduler {
     // op standaard-doel tot de deadline het venster binnenkomt; ARCHITECTURE v5.7).
     const ov = await this.app.getTeslaOverride();
     const effActive = ov.active && !ov.far_deadline;
-    const mandatory = effActive ? ov.target_pct : ov.auto_target_pct;
+    const vacationSoc = s.get('ev_vacation_soc') ?? 55;
+    const mandatory = effActive ? ov.target_pct : (ov.far_deadline ? vacationSoc : ov.auto_target_pct);
     const dlMs = new Date(effActive ? ov.deadline_iso : ov.auto_deadline).getTime();
-    const ceiling = effActive ? mandatory : Math.min(s.get('ev_opportunistic_soc') ?? 85, 100);
+    // Vakantie-hold: geen overschot-top-up boven het hold-niveau.
+    const ceiling = (effActive || ov.far_deadline) ? mandatory : Math.min(s.get('ev_opportunistic_soc') ?? 85, 100);
 
     // Overschot nu (zero-export): beschikbaar = huidig EV-vermogen − grid − buffer.
     const grid   = await this._readGridW();
