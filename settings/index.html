@@ -360,7 +360,7 @@
     // Meldingen-vinkboxen laden (defaults gelijk aan NotificationManager).
     function loadNotifyToggles() {
       var defs = { notify_plan:false, notify_battery:false, notify_session:false,
-                   notify_ev:true, notify_heatpump:true, notify_tesla:true, notify_errors:true };
+                   notify_ev:false, notify_heatpump:false, notify_tesla:false, notify_errors:false };
       Object.keys(defs).forEach(function(key) {
         _Homey.get(key).then(function(v) {
           var el = document.getElementById(key);

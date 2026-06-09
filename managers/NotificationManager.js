@@ -11,15 +11,17 @@
  * in DEFAULTS (de chatty groepen staan standaard uit).
  */
 
+// Standaard ALLES uit (gebruikerskeuze: rustige tijdlijn). Per groep weer aan te
+// zetten via instellingen (notify_<categorie>).
 const DEFAULTS = {
-  plan:     false,  // dagplan krap/haalbaar, prioriteit niet haalbaar (chatty)
-  battery:  false,  // thuisaccu onder minimum / reserve bereikt (chatty)
-  session:  false,  // EV laden gestart/gestopt (chatty)
-  heatpump: true,   // warmtepomp omgeschakeld (zelden)
-  ev:       true,   // EV klaar voor vertrek, rit
-  tesla:    true,   // scheduler-waarschuwingen (auto reageert niet / rechten)
-  errors:   true,   // ophaalfouten e.d.
-  info:     true,   // overig
+  plan:     false,
+  battery:  false,
+  session:  false,
+  heatpump: false,
+  ev:       false,
+  tesla:    false,
+  errors:   false,
+  info:     false,
 };
 
 const DEDUPE_MS = 30 * 60 * 1000;   // identieke melding hooguit 1×/30 min
