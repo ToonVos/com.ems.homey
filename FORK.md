@@ -33,6 +33,9 @@ Elke module = eigen feature-branch, PR-baar naar upstream. Status per 2026-06-08
 | `feat/m15-battery-health-guard` | Batterijgezondheid: bandgewijze timing hoge SoC | ✅ |
 | `feat/m16-tuning-debug-layer` | Week-tuning-laag (correlatie, retentie, week-rapport) | ✅ |
 | `feat/m17-energyzero-fullday` | EnergyZero volledige uurprijzen vandaag+morgen | ✅ |
+| `feat/m19-combi-postsaldering` | Gecombineerde post-saldering-modus (prijs + overschot) | ✅ |
+| `feat/m20-notification-categories` | Tijdlijn-meldingen per categorie instelbaar + ontdubbeling | ✅ |
+| (fixes) | Laadlimiet-als-stop, reconcile + wake-bewust (could_not_wake_buses), widget auto-hoogte (`setHeight`) | ✅ |
 
 Module 1 (autonome batterij) en de Tesla-sturing zonder Wall Connector zijn **blockers** om de app in deze setup te laten draaien; de prijs-stack (m8–m17) is de onderscheidende regie. Volledige beschrijving: [`docs/EMS-TESLA-PRICE-CHARGING.md`](docs/EMS-TESLA-PRICE-CHARGING.md).
 

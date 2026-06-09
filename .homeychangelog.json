@@ -6,5 +6,9 @@
   "1.6.1": {
     "en": "Fork: price-based Tesla charging for dynamic contracts. New 'price' charge mode that schedules charging into the cheapest hours until a deadline; dashboard tile to set target %/time; direct Tesla control (no manual flow); charge verification + wake; battery-health guard; opportunistic weekly top-up (max 85%, once/week); EnergyZero full-day prices; weekly tuning/debug layer with retention.",
     "nl": "Fork: prijs-gestuurd Tesla-laden voor dynamische contracten. Nieuwe laadmodus 'Prijs' die het laden naar de goedkoopste uren tot een deadline schuift; dashboard-tegel voor doel-%/tijd; directe Tesla-sturing (geen handmatige flow); laad-verificatie + wakker maken; batterijgezondheid-bewaking; opportunistisch wekelijks bijladen (max 85%, 1×/week); EnergyZero volledige dagprijzen; week-tuning-/debug-laag met retentie."
+  },
+  "1.7.0": {
+    "en": "Robust charge control: charge-limit ('charge to X%') as primary stop so the car self-stops even while asleep; reconcile loop with wake-aware retry (could_not_wake_buses) and credit-safe backoff; car-state checked free before waking. Combined post-saldering charge mode (mandatory via cheapest hours/free surplus, top-up only on solar surplus). Widget: richer status incl. next charge time + auto-height. Timeline notifications grouped and configurable (all off by default).",
+    "nl": "Robuuste laadsturing: laadlimiet ('laad tot X%') als hoofd-stop zodat de auto zelf stopt, ook slapend; reconcile-lus met wake-bewuste herproef (could_not_wake_buses) en credit-veilige backoff; auto-staat gratis gecheckt vóór een wake. Gecombineerde post-saldering-laadmodus (verplicht via goedkoopste uren/gratis overschot, top-up alleen op zonne-overschot). Widget: rijkere status incl. eerstvolgend laadmoment + auto-hoogte. Tijdlijn-meldingen gegroepeerd en instelbaar (standaard alles uit)."
   }
 }

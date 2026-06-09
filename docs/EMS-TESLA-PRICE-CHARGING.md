@@ -110,5 +110,41 @@ Om de app te blijven tunen:
   weglopende commando's en lege accu.
 - `dryrun`-stand om eerst te observeren zonder te sturen.
 
+## Sturing & robuustheid (v1.7 — uit live gebruik)
+
+Tesla-commando's vergen een wakkere auto; een **slapende, ingeplugde Tesla laadt tóch
+door tot z'n eigen limiet**, en losse start/stop-commando's falen dan met
+`could_not_wake_buses`. Daarom:
+
+- **Laadlimiet = ons doel als hoofd-stop.** De scheduler zet `charge_limit` op het
+  actuele stop-punt (verplicht doel / plafond / huidige SoC) — de auto stopt dan
+  **zelf**, ook slapend ladend. Start/stop (`charging_on`-capability) is secundair, voor
+  de timing.
+- **Reconcile elke cyclus:** vergelijk gewenst vs werkelijk laden en stuur bij tot het
+  klopt (niet alleen op een eigen toestand-wissel).
+- **Wake-bewust + credit-veilig:** `car_state` is **gratis** te checken; pas dán wekken
+  (wake = $0,02 = 20× een commando; commando $0,001; data $0,002 — $10/maand gratis per
+  Tesla-account). Backoff na een mislukt commando, opgeven + melden na enkele pogingen.
+
+## Laadmodi
+
+| Modus | Wanneer | Gedrag |
+|---|---|---|
+| `price` | **pre-saldering** (nu) | Verplicht doel via goedkoopste uren tot deadline; opportunistisch tot plafond (≤85%, 1×/week) via de goedkoopste week-uren. |
+| `surplus` | **post-saldering** | Gecombineerd (`_tickCombi`): verplicht doel via goedkoopste uren **of gratis overschot**; daarboven (→plafond) **uitsluitend** op zonne-overschot, geen netinkoop. Behoudend (aanhoudend overschot, min aan/uit, amp-hysterese — wear-veilig). |
+| Menno's `solar_*`/`fixed`/`off` | — | Onaangeroerd; EvController haakt af bij `price`/`surplus`. |
+
+## Tijdlijn-meldingen
+
+`NotificationManager` met **categorieën** (`plan`, `battery`, `session`, `ev`, `heatpump`,
+`tesla`, `errors`) — per groep aan/uit via settings `notify_<cat>` (instellingen-kaart
+"🔔 Meldingen"). **Standaard alles uit** (rustige tijdlijn). Ontdubbeling: identieke
+melding hooguit 1×/30 min.
+
+## Diagnose-API (api.js)
+
+`getTeslaScheduler` (ring), `getTuningReport` (week-samenvatting), `getUserdataFile`
+(lees `/userdata`-logs) — voor terugwerkende analyse.
+
 > Ontwerp & rationale: zie de brein-repo `ems-homey` (`docs/ARCHITECTURE.md`,
 > `tasks/phase-3/3.4-fork-implementatieplan.md`).
