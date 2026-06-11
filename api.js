@@ -219,6 +219,22 @@ module.exports = {
     };
   },
 
+  // d08-A: dagelijkse energie-boekhouding (live huidige dag + laatste afgeronde dagen).
+  async getEnergyLedger({ homey, query }) {
+    const fs = require('fs'); const path = require('path');
+    try {
+      const ledger = homey.app.ems?.energyLedger;
+      const live = ledger ? await ledger.getLive() : null;
+      let days = [];
+      try {
+        const txt = fs.readFileSync(path.join('/userdata', 'energy-ledger.jsonl'), 'utf8').trim();
+        const n = Number((query && query.tail) || 14);
+        days = (txt ? txt.split('\n') : []).slice(-n).map(l => { try { return JSON.parse(l); } catch (_) { return l; } });
+      } catch (_) { /* nog geen afgeronde dag */ }
+      return { ok: true, today: live, days };
+    } catch (e) { return { ok: false, error: e.message }; }
+  },
+
   async getEvDiag({ homey }) {
     try {
       const ems   = homey.app.ems;

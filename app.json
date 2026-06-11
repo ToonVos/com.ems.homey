@@ -890,6 +890,10 @@
     "getTeslaLearn": {
       "method": "GET",
       "path": "/getTeslaLearn"
+    },
+    "getEnergyLedger": {
+      "method": "GET",
+      "path": "/getEnergyLedger"
     }
   }
 }

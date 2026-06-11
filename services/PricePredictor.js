@@ -26,11 +26,15 @@ const CACHE_TTL_MS = 6 * 60 * 60 * 1000;     // 6 uur
 const REFRESH_MS   = 6 * 60 * 60 * 1000;
 const USERDATA_DIR = '/userdata';
 
-// All-in formule-constanten (ARCHITECTURE §6.1, LOCKED via Belastingdienst+Zonneplan)
-const BTW          = 1.21;
-const EB_PLUS_INKOOP = 0.13085;   // energiebelasting+inkoopvergoeding incl. btw
-const EXPORT_INKOOP  = 0.02;
-const EXPORT_BTW     = 1.10;
+// All-in formule-defaults (2026, Zonneplan + Belastingdienst). Per veld instelbaar via
+// settings (invulvelden op de instellingen-pagina) — pas aan als tarieven wijzigen.
+//   import = kale × btw + energiebelasting_incl + opslag_incl
+//   export = (kale + sunbonus) × export_factor
+const DEF_BTW            = 1.21;       // BTW-factor (21%)
+const DEF_ENERGY_TAX_EUR = 0.1108;    // energiebelasting 2026 incl. btw (€/kWh)
+const DEF_SUPPLIER_FEE_EUR = 0.0199892; // Zonneplan inkoopvergoeding/opslag 2026 incl. btw (€/kWh)
+const DEF_EXPORT_BONUS_EUR = 0.02;    // Zonneplan Sunbonus (€/kWh)
+const DEF_EXPORT_FACTOR  = 1.10;      // Zonneplan +10% terugleverbonus
 
 class PricePredictor {
 
@@ -50,6 +54,19 @@ class PricePredictor {
   }
 
   destroy() { if (this._timer) this.homey.clearInterval(this._timer); }
+
+  /** Prijs-componenten uit settings (invulvelden), met 2026-defaults. */
+  priceParams() {
+    const s = this.homey.settings;
+    const num = (k, d) => { const v = s.get(k); return (typeof v === 'number' && isFinite(v)) ? v : d; };
+    return {
+      btw:          num('price_btw_factor',     DEF_BTW),
+      energyTax:    num('price_energy_tax_eur', DEF_ENERGY_TAX_EUR),
+      supplierFee:  num('price_supplier_fee_eur', DEF_SUPPLIER_FEE_EUR),
+      exportBonus:  num('price_export_bonus_eur', DEF_EXPORT_BONUS_EUR),
+      exportFactor: num('price_export_factor',  DEF_EXPORT_FACTOR),
+    };
+  }
 
   /** Volledige horizon: [{ ts, kale_eur, import_eur, export_eur }] op 15-min resolutie. */
   getHorizon() { return this._horizon; }
@@ -143,13 +160,14 @@ class PricePredictor {
     const t = data.t || [];
     if (s.length === 0 || s.length !== t.length) throw new Error(`onverwacht formaat (s=${s.length}, t=${t.length})`);
 
+    const P = this.priceParams();
     this._horizon = s.map((sec, i) => {
       const kale = t[i] / 100;                                  // ct/kWh → €/kWh
       return {
         ts:         new Date(sec * 1000).toISOString(),
         kale_eur:   +kale.toFixed(5),
-        import_eur: +(kale * BTW + EB_PLUS_INKOOP).toFixed(5),
-        export_eur: +((kale + EXPORT_INKOOP) * EXPORT_BTW).toFixed(5),
+        import_eur: +(kale * P.btw + P.energyTax + P.supplierFee).toFixed(5),
+        export_eur: +((kale + P.exportBonus) * P.exportFactor).toFixed(5),
       };
     });
     this._fetchedAt = Date.now();

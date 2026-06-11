@@ -16,6 +16,7 @@ const PriorityManager       = require('./PriorityManager');
 const ConsumptionLearner    = require('../services/ConsumptionLearner');
 const TripPlanner           = require('../services/TripPlanner');
 const DayAheadPrices        = require('../services/DayAheadPrices');
+const EnergyLedger          = require('../services/EnergyLedger');   // d08-A energie-boekhouding
 
 const LOOP_INTERVAL_MS = 60 * 1000; // 1 minute
 
@@ -38,6 +39,7 @@ class EmsManager {
     this.tesla          = new TeslaEvAdapter(app);
     this.evController   = null; // created after tripPlanner is ready
     this.dumpLoad       = new DumpLoadAdapter(app);
+    this.energyLedger   = new EnergyLedger(app);   // d08-A: dagelijkse energie-boekhouding (observe-only)
 
     // Services
     this.pvCurve     = new PvCurve(app);
@@ -218,6 +220,7 @@ class EmsManager {
       await this._executeTick(state, hourSlot);
       await this._updateConsumptionHistory(state);
       this._recordActuals(state);
+      this.energyLedger.accumulate(state);   // d08-A: dag-boekhouding (observe-only)
     } catch (err) {
       this.app.error('[EMS] tick error:', err);
     }
