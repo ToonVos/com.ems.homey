@@ -40,8 +40,11 @@ const EFFICIENCY   = 0.91;             // on-board charger @ vol vermogen (~16A)
 const WEEK_MS      = 7 * 24 * 60 * 60 * 1000;  // opportunistisch hooguit 1×/week
 const RECONCILE_MS = 5 * 60 * 1000;    // min. tussen herhaalde bijstuur-commando's
 const FAIL_RETRY_MS = 90 * 1000;       // sneller opnieuw na een mislukte sturing (met wake)
+const VERIFY_MS    = 60 * 1000;        // na een nog-niet-bevestigd commando: ~1 min later opnieuw kijken
 const GIVEUP_MS     = 30 * 60 * 1000;  // na opgeven: lang terug (geen wake-credits verbranden)
 const MAX_DRIVE_ATTEMPTS = 5;          // na zoveel mislukte pogingen: melden + backoff
+const WAKE_WAIT_MS = 30 * 1000;        // max wachten tot de auto 'online' is ná een wake-commando
+const WAKE_POLL_MS = 3 * 1000;         // poll-interval van car_state tijdens dat wachten
 
 class TeslaScheduler {
 
@@ -56,6 +59,7 @@ class TeslaScheduler {
     this._lastSentWant = null;     // laatst gestuurde wens (true=laden, false=stop)
     this._lastSentTs = 0;          // wanneer voor het laatst gestuurd (cooldown)
     this._mismatchStreak = 0;      // opeenvolgende cycli werkelijk≠gewenst (wake-escalatie)
+    this._session = null;          // lopende laadsessie (voor lerend tijd/temp-model, fase A)
   }
 
   async init() {
@@ -63,9 +67,39 @@ class TeslaScheduler {
     this._tickSafe();
     this._timer = this.homey.setInterval(() => this._tickSafe(), PERIOD_MS);
     this.app.log(`[TeslaSched] actief — prijs-gestuurd, ${this._mode()} | cyclus ${PERIOD_MS / 1000}s`);
+    this._subscribeEvents();   // push: reageer direct op laden-start/stop i.p.v. wachten op de tick
   }
 
-  destroy() { if (this._timer) this.homey.clearInterval(this._timer); }
+  /**
+   * Abonneer op capability-wijzigingen van het Tesla-batterij-device (push). De com.tesla-app
+   * vuurt deze realtime zodra hij de cloud-status bijwerkt — sneller dan onze 60s-tick en
+   * zonder cache-vertraging. Bij elke relevante wijziging draaien we meteen een tick, zodat
+   * een zelf-gestarte laadsessie binnen seconden herkend en (indien nodig) gestopt wordt.
+   * De 60s-tick blijft als vangnet als de realtime-verbinding wegvalt.
+   */
+  async _subscribeEvents() {
+    const caps = ['charging_on', 'charging_state', 'measure_charge_power', 'charging_port', 'charging_port_cable'];
+    try {
+      const dev = await this.app.getDevice(this._teslaBatId());
+      this._capInstances = [];
+      for (const cap of caps) {
+        if (!dev.capabilities?.includes(cap)) continue;
+        const inst = dev.makeCapabilityInstance(cap, (value) => {
+          this.app.log(`[TeslaSched] event ${cap}=${value} → directe tick`);
+          this._tickSafe();
+        });
+        this._capInstances.push(inst);
+      }
+      this.app.log(`[TeslaSched] push-abonnement actief op ${this._capInstances.length} capabilities`);
+    } catch (e) {
+      this.app.error('[TeslaSched] push-abonnement mislukt (val terug op 60s-tick):', e?.message || e);
+    }
+  }
+
+  destroy() {
+    if (this._timer) this.homey.clearInterval(this._timer);
+    for (const inst of this._capInstances || []) { try { inst.destroy(); } catch (_) {} }
+  }
 
   getRecent(limit = 200) { return this._ring.slice(-limit); }
 
@@ -153,34 +187,77 @@ class TeslaScheduler {
     return d.tesla || '37cdaf85-28d4-41ca-95fb-7591764aa597';
   }
 
-  /** Leest RECHTSTREEKS {charging, limit} (vers, omzeilt adapter-cache). null=onbekend. */
-  async _readActual() {
+  /**
+   * Leest {charging, limit, dc, powerKw}. null=onbekend.
+   *
+   * `charging` = wat de TESLA ZELF meldt (charging_on / charging_state). Dat is hét bewijs
+   * van laden; de vermogensmeting (measure_charge_power) is daarvoor NIET leidend — die kan
+   * stale zijn (gezien: 3 kW blijven hangen ná de stop → zou een onnodige wake triggeren).
+   * `powerKw` houden we alleen ter info in de log. charging_on kan een paar minuten achterlopen,
+   * maar dat valt binnen de geaccepteerde reactietijd (≈10 min).
+   * `dc`=true bij DC-snelladen (Supercharger) → onderweg → niet sturen (home-gate).
+   * De charge-limiet (charge_limit_soc) komt van het batterij-device (auto-config).
+   */
+  async _readActual(st = null) {
+    let charging = null;
+    let limit = null;
+    let dc = false;
+    let powerKw = null;
+    let noPower = false;
     try {
       const dev = await this.app.getDevice(this._teslaBatId());
       const c = dev?.capabilitiesObj || {};
-      const power  = c.measure_charge_power?.value;
-      const stateC = c.charging_state?.value;
-      let charging = null;
-      if (power != null) charging = power > 0.1;             // kW
-      else if (stateC != null) charging = String(stateC).toLowerCase() === 'charging';
-      const limit = (typeof c.measure_charge_limit_soc?.value === 'number')
-        ? c.measure_charge_limit_soc.value : null;
-      return { charging, limit };
-    } catch (_) { return { charging: null, limit: null }; }
+      const p = c.measure_charge_power?.value;
+      powerKw = (typeof p === 'number') ? p : null;
+      if (typeof c.measure_charge_limit_soc?.value === 'number') limit = c.measure_charge_limit_soc.value;
+      if ((c.measure_charge_power_dc?.value ?? 0) > 0.1) dc = true;   // DC-vermogen alleen voor onderweg-detectie
+      const stateText = c.charging_state?.value != null ? String(c.charging_state.value).toLowerCase() : null;
+      // De Tesla-boolean is leidend: charging_on (via adapter st) of charging_state='Charging'.
+      if ((st && st.charging === true) || stateText === 'charging') charging = true;
+      else if ((st && st.connected) || stateText != null) charging = false;
+      // 'NoPower' = kabel ingeplugd maar GEEN stroom op de kabel (laadpunt uit → rode kabel),
+      // i.t.t. 'Stopped' (stroom beschikbaar, gepauzeerd → blauwe kabel). Starten is dan zinloos.
+      noPower = stateText ? stateText.replace(/\s/g, '') === 'nopower' : false;
+    } catch (_) { /* velden blijven null */ }
+    return { charging, limit, dc, powerKw, noPower };
   }
 
   /** Maakt de auto wakker (best-effort) zodat een volgend commando aankomt. */
+  _sleep(ms) { return new Promise((r) => this.homey.setTimeout(r, ms)); }
+
+  /**
+   * Wekt de auto en WACHT tot hij echt 'online' is (car_state op het AUTO-device) vóór we
+   * een commando sturen — anders landt het laad-commando op een nog-slapende auto en geeft
+   * `could_not_wake_buses`, met een onnodige tweede wake op de volgende tick tot gevolg.
+   * Logt hoe lang het wekken duurde (zichtbaar in rec.wake_secs en de app-log).
+   * @returns {boolean} of de auto binnen de timeout online kwam.
+   */
   async _wake() {
+    const t0 = Date.now();
     try {
       await this.app.runDeviceAction(this._teslaCarId(), 'car_wake_up', { wait: 'wait' });
-      this._lastAmps = null; this._lastLimit = null;        // forceer her-sturing van amps/limiet
-      this._bumpCmd();
-    } catch (e) { this.app.log(`[TeslaSched] wake niet gelukt (${e?.message || e})`); }
+    } catch (e) { this.app.log(`[TeslaSched] wake-commando faalde (${e?.message || e})`); }
+    this._bumpCmd();
+    let cs = await this._carState();
+    while (cs !== 'online' && (Date.now() - t0) < WAKE_WAIT_MS) {
+      await this._sleep(WAKE_POLL_MS);
+      cs = await this._carState();
+    }
+    const secs = +((Date.now() - t0) / 1000).toFixed(1);
+    const online = cs === 'online';
+    this._lastWakeSecs = secs; this._lastWakeOnline = online;
+    if (online) this._ewmaSet('tesla_learn_wake_secs', secs, 0.3, 0, 120, 1);   // fase A: leer wektijd
+    this._lastAmps = null; this._lastLimit = null;          // forceer her-sturing van amps/limiet
+    this.app.log(`[TeslaSched] wake → car_state=${cs} na ${secs}s (online=${online})`);
+    return online;
   }
 
   async _tickSafe() {
+    if (this._ticking) return;       // re-entry-guard: _wake() kan een tick ~30s blokkeren
+    this._ticking = true;
     try { await this._tick(); }
     catch (err) { this.app.error('[TeslaSched] fout:', err.message); }
+    finally { this._ticking = false; }
   }
 
   async _tick() {
@@ -204,8 +281,18 @@ class TeslaScheduler {
       const why = chargeMode !== 'price'
         ? `laadmodus '${chargeMode}'`
         : 'vast tarief (geen uurprijzen)';
+      // Ook al stuurt de scheduler niet: lees verbinding/laadstroom zodat de widget
+      // toont of de auto aangekoppeld is en er stroom loopt (anders lijkt status leeg).
+      let connected, soc = null, charging = null;
+      try {
+        const st = await tesla.getState();
+        connected = st?.connected ?? false;
+        soc = st?.soc ?? null;
+        charging = (await this._readActual(st)).charging;
+      } catch (_) { connected = undefined; }
       this._last = {
         decision: 'inactive', mode: this._mode(), charge_now: false,
+        connected, soc, charging_actual: charging,
         reason: `${why} — prijs-scheduler inactief`,
       };
       return;
@@ -218,10 +305,11 @@ class TeslaScheduler {
     const connected = st?.connected ?? false;
     const soc       = st?.soc ?? null;
 
-    // Laadsnelheid-observer: meet echte %/uur tijdens laden en gebruik dat voor
-    // "hoeveel uren nodig"; val terug op berekende powerKw tot er data is.
-    this._observeRate(st, cap);
-    const effRate = this._effectiveRateKw(powerKw);   // kW
+    // Laadsnelheid-observer + lerend tijd/temp-model (fase A): meet %/uur (globaal + per
+    // temp-bucket), leer overhead, log sessies. Fase C: de beslissingen GEBRUIKEN nu de
+    // geleerde, temp-afhankelijke snelheid (val terug op globaal/berekend bij weinig data).
+    await this._learn(st, cap);
+    const effRate = this._effectiveRateKw(powerKw, this._lastModuleTemp);   // kW (temp-bewust)
     const slotKwh = effRate * SLOT_H;
 
     // 2. Override of standaard-doel + opportunistisch plafond.
@@ -263,6 +351,13 @@ class TeslaScheduler {
     let nextChargeIso = null;  // eerstvolgend gepland laadmoment
     let selectedCount = 0;
     let tier = null;
+    let actualCharging = null;   // echte laadstroom (true/false/null=onbekend)
+    let carLimitRead = null;     // door de auto gerapporteerde laadlimiet (%)
+    let awayDc = false;          // DC-snelladen → onderweg → niet sturen
+    let chargePowerKw = null;    // gemeten laadvermogen (kW) — grondwaarheid voor laden
+    let carStateRead = null;     // car_state van het auto-device (online/asleep/…)
+    let wakeSecs = null;         // hoe lang het wekken duurde, indien deze tick gewekt
+    let noPowerOnCable = false;  // kabel ingeplugd maar geen stroom (laadpunt uit / rode kabel)
 
     if (!connected) {
       decision = 'skip_disconnected';
@@ -296,7 +391,14 @@ class TeslaScheduler {
       //   90–100%: pas op het laatste moment vóór deadline (guard), anders goedkoopst
       const mandSet = new Set();
       const addAll = (st) => { st.set.forEach(t => mandSet.add(t)); };
-      addAll(this._pickCheapest(within, bandKwh(0, HOLD), slotKwh, mandSet));
+      // 0–80%-band: aaneengesloten-bewust (fase B) — doorladen waar het loont, splitsen
+      // alleen als de prijsbesparing > C_session. Banden 80-90/90-100 blijven deadline-gestuurd.
+      const sessionEur = this.homey.settings.get('ev_session_cost_eur') ?? 0.10;
+      // Overhead (ramp) als extra energie bij de hoofd-vulling, zodat het blok ~1 slot
+      // langer is en de auto echt op doel komt (fase C). Alleen als er iets te laden valt.
+      const band0 = bandKwh(0, HOLD);
+      const overheadKwh = band0 > 0 ? (this._overheadMin() / 60) * effRate : 0;
+      addAll(this._pickContiguousOptimal(within, band0 + overheadKwh, slotKwh, mandSet, sessionEur));
       const win8090 = guard ? within.filter(h => h.t >= dlMs - MIDWIN_MS) : within;
       addAll(this._pickCheapest(win8090, bandKwh(HOLD, MID), slotKwh, mandSet));
       addAll(guard
@@ -357,7 +459,33 @@ class TeslaScheduler {
     let commanded = null, verify = null;
     if (connected && soc != null) {
       const want = chargeNow;
-      const { charging: actual, limit: carLimit } = await this._readActual();
+      const { charging: actual, limit: carLimit, dc, powerKw, noPower } = await this._readActual(st);
+      actualCharging = actual;        // de Tesla-boolean is leidend (charging_on/charging_state)
+      carLimitRead = carLimit;
+      awayDc = dc;
+      chargePowerKw = powerKw;
+      noPowerOnCable = noPower;
+      if (!noPower) this._noPowerNotified = false;   // reset zodra er weer stroom op de kabel staat
+      // Home-gate: alleen sturen als de auto THUIS is. DC-snelladen = Supercharger =
+      // onderweg → handen af, zodat onderweg-laden tot gekozen waardes blijft werken
+      // (overbruggen kan altijd via geplande lading in de Tesla-app). AC = thuis.
+      const atHome = !dc;
+      carStateRead = await this._carState();   // online/asleep — gratis read van het auto-device
+
+      // 4-pre. Wake-ANTICIPATIE (fase D): komt er een laadslot aan terwijl de auto slaapt?
+      // Wek 'm dan ~wektijd vóór de slotgrens, zodat het laden direct op tijd begint i.p.v.
+      // pas nadat com.tesla 'online' oppikt (asleep-poll kan ~10 min duren). Hooguit 1× per
+      // gepland slot; vervangt de reactieve wake (zelfde aantal credits, betere timing).
+      if (live && atHome && !want && nextChargeIso && carStateRead && carStateRead !== 'online') {
+        const startMs = new Date(nextChargeIso).getTime();
+        const leadMs = this._wakeLeadSec() * 1000 + 60_000;   // wektijd + 1 poll-cyclus marge
+        const dt = startMs - Date.now();
+        if (dt > 0 && dt <= leadMs && this._preWokenForTs !== startMs) {
+          this._preWokenForTs = startMs;
+          await this._wake(); wakeSecs = this._lastWakeSecs;
+          verify = `pre-wake (${wakeSecs}s)`;
+        }
+      }
 
       // capPct = hoogste SoC die de auto nu mag bereiken (= ons stop-punt):
       //   verplicht laden → mandatory · opportunistisch venster → ceiling ·
@@ -365,14 +493,21 @@ class TeslaScheduler {
       const capPct = Math.max(50, Math.min(100, Math.round(
         (want && tier === 'opportunistisch') ? ceiling : mandatory
       )));
+      // Limiet-DOEL: laden → capPct (laad tot doel). Pauze → richting huidige SoC, nooit
+      // omhoog, ondergrens 50% (Tesla kan niet lager). Zo stopt de auto zichzelf op ~SoC
+      // als de zachte stop niet landt — i.p.v. via een te hoge limiet alsnog naar 55% te laden.
+      const pauseLimit  = Math.max(50, Math.min(carLimit ?? 100, Math.round(soc)));
+      const limitTarget = want ? capPct : pauseLimit;
 
-      // 4a. Laadlimiet gelijkzetten aan capPct = hoofd-stop. Werkt zolang de auto
-      //     bereikbaar is (ladend = wakker); throttled. Bij START zet _drive 'm ook.
-      if (live && carLimit != null && carLimit !== capPct && actual === true &&
+      // 4a. Laadlimiet = limitTarget = stop-punt. Synchroniseren zodra de Tesla laden meldt
+      //     (actual===true): laden → limiet naar capPct; pauze → limiet naar ~SoC zodat de auto
+      //     zichzelf op het doel stopt. Niet bij niet-laden (zou laden uitlokken). Alleen thuis —
+      //     onderweg de limiet nooit aanpassen.
+      if (live && atHome && carLimit != null && carLimit !== limitTarget && actual === true &&
           (Date.now() - (this._lastLimitTry || 0)) >= RECONCILE_MS) {
-        if (await this._tryAction(this._teslaBatId(), 'charge_limit', { limit: capPct })) {
-          this._lastLimit = capPct; this._lastLimitTry = Date.now();
-          this._bumpCmd(); verify = `limiet→${capPct}%`;
+        if (await this._tryAction(this._teslaBatId(), 'charge_limit', { limit: limitTarget })) {
+          this._lastLimit = limitTarget; this._lastLimitTry = Date.now();
+          this._bumpCmd(); verify = `limiet→${limitTarget}%`;
         }
       }
 
@@ -383,18 +518,47 @@ class TeslaScheduler {
       const lastFailed  = !!this._lastDriveError;      // vorige sturing mislukte (could_not_wake_buses)
       const streak      = this._mismatchStreak || 0;
       const givenUp     = streak >= MAX_DRIVE_ATTEMPTS;
-      const interval    = givenUp ? GIVEUP_MS : (lastFailed ? FAIL_RETRY_MS : RECONCILE_MS);
+      // Hebben we al ≥1 commando gestuurd maar volgt de auto nog niet (streak≥1)? Dan is
+      // dit een nog-niet-bevestigde stop/start → ~1 min later opnieuw kijken (i.p.v. 5 min),
+      // zodat de wake-then-stop-escalatie (needWake bij streak≥2) snel aanslaat. "Eerst
+      // zacht (geen wake), ~1 min later kijken, dan wake + hard stoppen."
+      const unconfirmed = streak >= 1;
+      const interval    = givenUp ? GIVEUP_MS
+                        : lastFailed  ? FAIL_RETRY_MS
+                        : unconfirmed ? VERIFY_MS
+                        : RECONCILE_MS;
       const due         = wishChanged || (Date.now() - (this._lastSentTs || 0)) >= interval;
 
-      if (mismatch && due) {
+      if (!atHome) {
+        // Onderweg (DC-snelladen): niet sturen; laat de auto/gebruiker het regelen.
+        this._lastSentWant = null; this._mismatchStreak = 0;
+        if (!verify) verify = 'onderweg (DC) — niet sturen';
+      } else if (noPowerOnCable && want2) {
+        // Kabel ingeplugd maar geen stroom (laadpunt uit / rode kabel): starten is zinloos
+        // (kost alleen commando's/wakes). Niet sturen; gebruiker éénmalig waarschuwen.
+        this._lastSentWant = null; this._mismatchStreak = 0;
+        verify = 'geen stroom op kabel (laadpunt uit?)';
+        if (!this._noPowerNotified) {
+          this._noPowerNotified = true;
+          this.app.notifications?.send(
+            '🔌 Tesla is aangekoppeld maar er staat geen stroom op de kabel (laadpunt uit / rode kabel). Zet het laadpunt aan zodat ik kan laden.',
+            'tesla'
+          );
+        }
+      } else if (mismatch && due) {
         this._mismatchStreak = wishChanged ? 1 : streak + 1;
         commanded = want2 ? 'start' : 'stop';
         if (live) {
-          // Wakker maken bij herhaalde mismatch / na een mislukte sturing —
-          // niet meer na opgeven (credit-bescherming: wake = 20 credits).
-          const needWake = actual !== null && !givenUp && (lastFailed || this._mismatchStreak >= 2);
-          if (needWake) { await this._wake(); verify = `wake#${this._mismatchStreak}`; }
-          const ok = await this._drive(want2, capPct);
+          // Wakker maken (wake=20 cr) wanneer nodig, niet na opgeven:
+          //  • bij een START van een NIET-online auto meteen op de 1e poging — een zachte
+          //    start landt toch niet op een slapende auto (could_not_wake_buses) en kost
+          //    alleen tijd + een extra wake later;
+          //  • anders pas bij herhaalde mismatch / na een mislukte sturing.
+          const startAsleep = want2 && carStateRead != null && carStateRead !== 'online';
+          const needWake = actual !== null && !givenUp &&
+                           (lastFailed || this._mismatchStreak >= 2 || startAsleep);
+          if (needWake) { await this._wake(); wakeSecs = this._lastWakeSecs; verify = `wake#${this._mismatchStreak} (${wakeSecs}s)`; }
+          const ok = await this._drive(want2, limitTarget);
           if (!ok) commanded = null;
           if (this._mismatchStreak === MAX_DRIVE_ATTEMPTS) {
             this.app.notifications?.send(
@@ -423,6 +587,9 @@ class TeslaScheduler {
       ts_local: this.app.localTime(),
       mode: live ? 'live' : 'dryrun',
       connected, soc, target_pct: mandatory, ceiling_pct: ceiling, tier,
+      charging_actual: actualCharging, car_limit: carLimitRead, away_dc: awayDc,
+      charge_power_kw: chargePowerKw, car_state: carStateRead, wake_secs: wakeSecs,
+      no_power: noPowerOnCable,
       health_guard: (this.homey.settings.get('ev_battery_health') ?? true),
       deadline_local: this.app.localTime(deadline),
       override_active: ov.active,
@@ -440,7 +607,7 @@ class TeslaScheduler {
     };
     this._last = {
       decision, reason, charge_now: chargeNow, tier,
-      connected, soc,
+      connected, soc, charging_actual: actualCharging, no_power: noPowerOnCable,
       target_pct: mandatory, ceiling_pct: ceiling,
       kwh_needed: rec.kwh_needed, ready_by_iso: readyByIso,
       ready_by_local: rec.ready_by_local, ceil_ready_local: rec.ceil_ready_local,
@@ -496,11 +663,14 @@ class TeslaScheduler {
 
     // Overschot nu (zero-export): beschikbaar = huidig EV-vermogen − grid − buffer.
     const grid   = await this._readGridW();
-    const teslaW = await this._readChargePowerW();
+    const teslaW = await this._readChargePowerW(st);
     const maxW = maxA * phases * V, minW = minA * phases * V;
     const availW = teslaW - grid - buffer;
     const surplusA = Math.floor(Math.max(0, Math.min(maxW, availW)) / (phases * V));
-    const actual = (await this._readActual()).charging === true;
+    const act = await this._readActual(st);
+    const actual = act.charging === true;   // de Tesla-boolean is leidend (charging_on/charging_state)
+    const atHome = !act.dc;   // DC-snelladen = Supercharger = onderweg → niet sturen
+    const chargePowerKw = act.powerKw;
     if (availW >= minW) { if (!this._surplusSince) this._surplusSince = now; } else { this._surplusSince = 0; }
     const sustainedOk = this._surplusSince && (now - this._surplusSince) >= startMin * 60_000;
 
@@ -554,7 +724,7 @@ class TeslaScheduler {
     // Sturen — reconcile naar 'want' met backoff + wake (start én stop kunnen
     // een slapende auto vereisen; cap = laadlimiet zodat de auto zelf stopt).
     let commanded = null, verify = null;
-    if (connected && soc != null && live && decision !== 'skip_no_soc') {
+    if (connected && soc != null && live && decision !== 'skip_no_soc' && atHome) {
       const ampChange = want && Math.abs((this._lastAmps ?? -99) - Math.round(amps)) >= 2;
       const mismatch  = (actual !== want) || ampChange;
       const wishChanged = this._sLastWant !== want;
@@ -589,6 +759,7 @@ class TeslaScheduler {
     const rec = {
       ts: new Date().toISOString(), ts_local: tsLocal, mode: 'combi', sturing: this._mode(),
       connected, soc, target_pct: mandatory, ceiling_pct: ceiling, tier,
+      charging_actual: connected ? actual : null, away_dc: !atHome, charge_power_kw: chargePowerKw,
       decision, reason, charge_now: want, amps: Math.round(amps),
       kwh_needed: +kwhNeeded.toFixed(2),
       ready_by_local: readyByIso ? this.app.localTime(new Date(readyByIso)) : null,
@@ -599,6 +770,7 @@ class TeslaScheduler {
     this._last = {
       decision, reason, charge_now: want, amps: Math.round(amps), tier,
       target_pct: mandatory, ceiling_pct: ceiling, soc, connected,
+      charging_actual: connected ? actual : null,
       kwh_needed: rec.kwh_needed, ready_by_local: rec.ready_by_local,
       next_charge_local: rec.next_charge_local, current_price_eur: curPrice,
       mode: this._mode(), updated_local: tsLocal,
@@ -619,8 +791,12 @@ class TeslaScheduler {
     } catch (_) { return 0; }
   }
 
-  /** Huidig EV-laadvermogen (W) van de Tesla-batterij. */
-  async _readChargePowerW() {
+  /**
+   * Huidig EV-laadvermogen (W). Prefereert de adapter-state (powerW, alleen >0 mét
+   * Wall Connector/charger-device); val anders terug op het Tesla-batterij-device.
+   */
+  async _readChargePowerW(st = null) {
+    if (st && st.connected && (st.powerW ?? 0) > 0) return st.powerW;
     try {
       const dev = await this.app.getDevice(this._teslaBatId());
       const kw = dev?.capabilitiesObj?.measure_charge_power?.value;
@@ -652,6 +828,67 @@ class TeslaScheduler {
     return { set, count, lastTs };
   }
 
+  /**
+   * Fase B — aaneengesloten-bewuste keuze die TOTALE kosten minimaliseert:
+   *   kosten = Σ(energieprijs van gekozen slots) + n_sessies × C_session
+   * waarbij C_session (€) de kosten van een extra laadsessie-start vat (wake-credits +
+   * opspin-verlies + slijtage). Zo wordt alleen gesplitst als de prijsbesparing van wachten
+   * groter is dan die sessie-kosten:
+   *   • twee aangrenzende goedkope blokken → doorladen (één blok), want bridgen < C_session;
+   *   • goedkoop / duur-ertussen / later goedkoper → wél splitsen, want besparing > C_session.
+   * Kandidaten: 1 aaneengesloten blok, 2 blokken, en de losse-goedkoopste set (met run-penalty,
+   * dekt 3+ dips). Aanname: de horizon is in de tijd aaneengesloten (PricePredictor-slots).
+   */
+  _pickContiguousOptimal(slots, kwhNeeded, slotKwh, excludeSet, sessionEur) {
+    const set = new Set(); let count = 0, lastTs = null;
+    if (kwhNeeded <= 0 || slotKwh <= 0) return { set, count, lastTs };
+    const avail = slots.filter(s => !excludeSet || !excludeSet.has(s.t)).sort((a, b) => a.t - b.t);
+    const N = avail.length;
+    const n = Math.min(N, Math.ceil(kwhNeeded / slotKwh));
+    if (n <= 0) return { set, count, lastTs };
+    if (n >= N) { avail.forEach(s => set.add(s.t)); return { set, count: N, lastTs: avail[N - 1].t }; }
+
+    const price = avail.map(s => s.import_eur ?? 0);
+    const pre = [0];
+    for (let i = 0; i < N; i++) pre.push(pre[i] + price[i]);
+    const winCost = (s, len) => (pre[s + len] - pre[s]) * slotKwh;       // € energie
+    const runsOf = (idxs) => { const a = [...idxs].sort((x, y) => x - y); let r = 0; for (let i = 0; i < a.length; i++) if (i === 0 || a[i] !== a[i - 1] + 1) r++; return r; };
+
+    let best = { cost: Infinity, idxs: null };
+    // k=1: één aaneengesloten blok van n slots
+    for (let s = 0; s + n <= N; s++) {
+      const c = winCost(s, n) + sessionEur;
+      if (c < best.cost) best = { cost: c, idxs: Array.from({ length: n }, (_, k) => s + k) };
+    }
+    // k=2: twee disjuncte blokken (lengtes a en n−a)
+    for (let a = 1; a < n; a++) {
+      const b = n - a;
+      for (let sa = 0; sa + a <= N; sa++) {
+        for (let sb = 0; sb + b <= N; sb++) {
+          if (sb + b <= sa || sb >= sa + a) {                            // disjunct
+            const c = winCost(sa, a) + winCost(sb, b) + 2 * sessionEur;
+            if (c < best.cost) {
+              const idxs = [];
+              for (let k = 0; k < a; k++) idxs.push(sa + k);
+              for (let k = 0; k < b; k++) idxs.push(sb + k);
+              best = { cost: c, idxs };
+            }
+          }
+        }
+      }
+    }
+    // losse goedkoopste n slots, met run-penalty (dekt 3+ dips als dat goedkoper is)
+    {
+      const order = avail.map((s, i) => ({ i, p: price[i] })).sort((x, y) => x.p - y.p).slice(0, n).map(o => o.i);
+      const c = order.reduce((acc, i) => acc + price[i] * slotKwh, 0) + runsOf(order) * sessionEur;
+      if (c < best.cost) best = { cost: c, idxs: order };
+    }
+
+    best.idxs.forEach(i => set.add(avail[i].t));
+    count = set.size; lastTs = set.size ? Math.max(...set) : null;
+    return { set, count, lastTs };
+  }
+
   /** Laatste slots vóór de deadline (voor de 90–100%-band: 'pas op het laatste
    *  moment laden'). Kiest chronologisch van achteren, ongeacht prijs. */
   _pickLatest(slots, kwhNeeded, slotKwh, excludeSet) {
@@ -669,32 +906,133 @@ class TeslaScheduler {
     return { set, count, lastTs };
   }
 
-  /** Observeert echte laadsnelheid (%/uur → kWh/uur) als EWMA in settings. */
-  _observeRate(st, cap) {
-    const charging = st?.charging ?? false;
+  _tempBucket(t) {
+    if (t == null) return 'unknown';
+    if (t < 5)  return 'lt5';
+    if (t < 15) return '5_15';
+    if (t < 25) return '15_25';
+    return 'gt25';
+  }
+
+  async _readModuleTemp() {
+    try {
+      const dev = await this.app.getDevice(this._teslaBatId());
+      const v = dev?.capabilitiesObj?.module_temp?.value;
+      return (typeof v === 'number') ? v : null;
+    } catch (_) { return null; }
+  }
+
+  _ewmaSet(key, value, a = 0.3, lo = -Infinity, hi = Infinity, dp = 2) {
+    if (!(value > lo && value < hi)) return;
+    const prev = this.homey.settings.get(key);
+    const ewma = (typeof prev === 'number') ? prev * (1 - a) + value * a : value;
+    this.homey.settings.set(key, +ewma.toFixed(dp));
+  }
+
+  /**
+   * Fase A — lerend tijd/temp-model (OBSERVE-ONLY, stuurt nog geen beslissingen):
+   *  • steady-state laadsnelheid (kWh/h) als EWMA, globaal én per temp-bucket (module_temp);
+   *  • per-sessie overhead (= duur − ΔSoC·min/%), terug-gerekend bij sessie-einde;
+   *  • elke voltooide sessie als JSONL-regel (/userdata/tesla-sessions.jsonl).
+   */
+  async _learn(st, cap) {
+    const charging = st?.charging ?? false;     // intentie (charging_on/charging_state)
     const soc = st?.soc ?? null;
     const now = Date.now();
-    if (!charging || soc == null) { this._rateSample = null; return; }
-    if (!this._rateSample) { this._rateSample = { ts: now, soc }; return; }
-    const dtH  = (now - this._rateSample.ts) / 3_600_000;
-    const dSoc = soc - this._rateSample.soc;
-    if (dtH >= 0.083 && dSoc > 0) {                 // ≥5 min en SoC gestegen
-      const kwhPerH = (dSoc / 100 * cap) / dtH;
-      if (kwhPerH > 1 && kwhPerH < 50) {
-        const prev = this.homey.settings.get('tesla_observed_kwh_per_h');
-        const ewma = prev ? prev * 0.7 + kwhPerH * 0.3 : kwhPerH;
-        this.homey.settings.set('tesla_observed_kwh_per_h', +ewma.toFixed(2));
+    const temp = await this._readModuleTemp();
+    this._lastModuleTemp = temp;            // voor het temp-afhankelijke ratemodel (fase C)
+
+    // Sessie-grenzen.
+    if (charging && !this._session) {
+      this._session = { startTs: now, startSoc: soc, tempSum: temp ?? 0, tempN: (temp != null ? 1 : 0) };
+    } else if (!charging && this._session) {
+      this._finalizeSession(now, soc, cap);
+      this._session = null;
+    }
+
+    // Steady-state slope (alleen tijdens laden, SoC gestegen ≥5 min).
+    if (charging && soc != null) {
+      if (this._session && temp != null) { this._session.tempSum += temp; this._session.tempN++; }
+      if (!this._rateSample) { this._rateSample = { ts: now, soc }; return; }
+      const dtH  = (now - this._rateSample.ts) / 3_600_000;
+      const dSoc = soc - this._rateSample.soc;
+      if (dtH >= 0.083 && dSoc > 0) {
+        const kwhPerH = (dSoc / 100 * cap) / dtH;
+        if (kwhPerH > 1 && kwhPerH < 50) {
+          this._ewmaSet('tesla_observed_kwh_per_h', kwhPerH);                  // globaal (huidige beslissingen)
+          this._ewmaSet(`tesla_learn_rate_${this._tempBucket(temp)}`, kwhPerH); // per temp-bucket (fase C)
+        }
+        this._rateSample = { ts: now, soc };
+      } else if (dSoc < 0) {
+        this._rateSample = { ts: now, soc };
       }
-      this._rateSample = { ts: now, soc };
-    } else if (dSoc < 0) {
-      this._rateSample = { ts: now, soc };          // reset bij daling
+    } else {
+      this._rateSample = null;
     }
   }
 
-  /** Effectieve laadsnelheid (kW): gemeten EWMA indien plausibel, anders berekend. */
-  _effectiveRateKw(powerKw) {
+  /** Sessie-einde: overhead terugrekenen + sessie loggen. */
+  _finalizeSession(now, socEnd, cap) {
+    const s = this._session;
+    const durMin = (now - s.startTs) / 60_000;
+    const dSoc = (socEnd ?? s.startSoc) - s.startSoc;
+    const avgTemp = s.tempN ? s.tempSum / s.tempN : null;
+    const bucket = this._tempBucket(avgTemp);
+    const rate = this.homey.settings.get(`tesla_learn_rate_${bucket}`)
+              || this.homey.settings.get('tesla_observed_kwh_per_h');
+    let overhead = null;
+    if (dSoc >= 3 && rate > 1 && durMin > 0) {
+      const minPerPct = 0.6 * cap / rate;            // min per %  (= (cap/100)/rate u × 60)
+      overhead = durMin - dSoc * minPerPct;
+      if (overhead > -2 && overhead < 30) {
+        this._ewmaSet('tesla_learn_overhead_min', Math.max(0, overhead), 0.3, -1, 1e9, 1);
+        overhead = +Math.max(0, overhead).toFixed(1);
+      } else { overhead = null; }                    // implausibel → niet leren
+    }
+    this._appendSessionLog({
+      ts: new Date().toISOString(),
+      start_local: this.app.localTime(new Date(s.startTs)),
+      end_local: this.app.localTime(new Date(now)),
+      soc_start: s.startSoc, soc_end: socEnd, d_soc: dSoc,
+      duration_min: +durMin.toFixed(1),
+      avg_module_temp: avgTemp != null ? +avgTemp.toFixed(1) : null,
+      temp_bucket: bucket,
+      rate_kwh_h: rate ? +(+rate).toFixed(2) : null,
+      overhead_min: overhead,
+      wake_secs: this._lastWakeSecs ?? null,
+    });
+  }
+
+  _appendSessionLog(rec) {
+    try {
+      fs.appendFileSync(path.join(USERDATA_DIR, 'tesla-sessions.jsonl'), JSON.stringify(rec) + '\n');
+    } catch (e) { this.app.error('[TeslaSched] sessielog:', e.message); }
+  }
+
+  /**
+   * Effectieve laadsnelheid (kW), temp-bewust (fase C):
+   *   1) geleerde snelheid voor de huidige temp-bucket (module_temp) → "winter langer";
+   *   2) val terug op de globale EWMA;  3) anders de berekende powerKw (prior).
+   */
+  _effectiveRateKw(powerKw, temp = null) {
+    const plausible = (v) => (typeof v === 'number' && v > 1 && v < 50);
+    const byTemp = this.homey.settings.get(`tesla_learn_rate_${this._tempBucket(temp)}`);
+    if (plausible(byTemp)) return byTemp;
     const obs = this.homey.settings.get('tesla_observed_kwh_per_h');
-    return (obs && obs > 1 && obs < 50) ? obs : powerKw;
+    if (plausible(obs)) return obs;
+    return powerKw;
+  }
+
+  /** Geleerde overhead (min) per laadsessie — ramp/aanloop; prior = 3 min. */
+  _overheadMin() {
+    const v = this.homey.settings.get('tesla_learn_overhead_min');
+    return (typeof v === 'number' && v >= 0 && v < 30) ? v : 3;
+  }
+
+  /** Geleerde wektijd (s) — tijd tot de auto 'online' is; prior = 60 s. */
+  _wakeLeadSec() {
+    const v = this.homey.settings.get('tesla_learn_wake_secs');
+    return (typeof v === 'number' && v > 0 && v < 120) ? v : 60;
   }
 
   // Stuurt de Tesla RECHTSTREEKS via de device-flow-acties van de Tesla-app

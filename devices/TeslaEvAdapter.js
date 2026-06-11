@@ -1,6 +1,10 @@
 'use strict';
 
+const fs   = require('fs');
+const path = require('path');
 const Vehicle = require('../interfaces/Vehicle');
+
+const STATELOG_DIR = '/userdata';
 
 /**
  * TeslaEvAdapter
@@ -86,6 +90,9 @@ class TeslaEvAdapter extends Vehicle {
     this._vehicleStateCache    = null;   // last result of _getTeslaAppState()
     this._vehicleStateCacheTs  = 0;     // ms timestamp of last fetch
     this._vehicleStateCacheTTL = 10 * 60_000;  // 10 minutes
+
+    // Debug: laatste gelogde state-snapshot (voor change-detectie naar JSONL).
+    this._stateSnap = null;
   }
 
   // ─── Init ─────────────────────────────────────────────────────────────────
@@ -170,8 +177,100 @@ class TeslaEvAdapter extends Vehicle {
     this._lastVitals = vitals;
     this._detectChargingEvents(state);
     this._detectConnectionEvent(state);
+    await this._logStateChanges(state);
 
     return state;
+  }
+
+  /**
+   * Debug-logger: schrijft élke wijziging van een bekend Tesla-veld naar
+   * /userdata/tesla-statelog-YYYYMMDD.jsonl, mét tijdstempel. Logt zowel de
+   * afgeleide adapter-state (connected/charging/soc/power) ÁLS de ruwe capabilities
+   * van het auto-device (charging_on/charging_state/car_state) en het batterij-device
+   * (measure_charge_power/charge_limit_soc/charging_state) — de twee bronnen die we
+   * tegen elkaar moeten kunnen leggen. Diff voorkomt spam: alleen bij echte verandering.
+   * (powerW pas bij ≥100 W verschil, soc bij ≥1%.)
+   */
+  async _logStateChanges(state) {
+    try {
+      // Ruwe capabilities van auto-device.
+      let carCaps = {};
+      try {
+        if (this._teslaDeviceId) {
+          const c = (await this.app.getDevice(this._teslaDeviceId))?.capabilitiesObj || {};
+          carCaps = {
+            car_charging_state: c.charging_state?.value          ?? null,
+            car_charging_on:    c.charging_on?.value             ?? null,
+            car_state:          c.car_state?.value               ?? null,
+            car_shift_state:    c.car_shift_state?.value         ?? null,   // P/R/N/D → rijden
+            car_speed:          c.measure_car_drive_speed?.value ?? null,   // >0 = rijdt (SoC-daling = rijden, geen vampire)
+          };
+        }
+      } catch (_) { /* device tijdelijk weg */ }
+
+      // Ruwe capabilities van batterij-device (id uit settings).
+      let batCaps = {};
+      try {
+        const d = this.homey.settings.get('decisionlog_devices') || {};
+        const batId = d.teslaBat || 'd2ffa0cf-3b76-4185-9185-aee51364ce27';   // zelfde fallback als scheduler
+        if (batId) {
+          const c = (await this.app.getDevice(batId))?.capabilitiesObj || {};
+          batCaps = {
+            bat_charging_state:  c.charging_state?.value           ?? null,
+            bat_charge_power_kw: c.measure_charge_power?.value      ?? null,
+            bat_charge_power_ac: c.measure_charge_power_ac?.value   ?? null,
+            bat_charge_power_dc: c.measure_charge_power_dc?.value   ?? null,
+            bat_charge_current:  c.measure_charge_current?.value    ?? null,
+            bat_charge_voltage:  c.measure_charge_voltage?.value    ?? null,
+            bat_charge_limit:    c.measure_charge_limit_soc?.value  ?? null,
+            bat_charge_port:     c.charging_port?.value             ?? null,   // poort open/dicht
+            bat_charge_cable:    c.charging_port_cable?.value       ?? null,   // kabel aangesloten
+            bat_soc:             c.measure_soc_level?.value ?? c.measure_battery?.value ?? null,
+          };
+        }
+      } catch (_) { /* device tijdelijk weg */ }
+
+      const snap = {
+        connected: state.connected,
+        charging:  state.charging,
+        evseState: state.evseState,
+        soc:       state.soc,
+        powerW:    Math.round(state.powerW ?? 0),
+        currentA:  state.currentA ?? 0,
+        source:    state.source,
+        ...carCaps,
+        ...batCaps,
+      };
+
+      const prev = this._stateSnap;
+      if (!prev) {
+        this._stateSnap = snap;
+        this._appendStateLog({ event: 'init', snap });
+        return;
+      }
+
+      const changed = {};
+      for (const k of Object.keys(snap)) {
+        const a = prev[k], b = snap[k];
+        if (k === 'powerW')      { if (Math.abs((a || 0) - (b || 0)) >= 100) changed[k] = [a, b]; }
+        else if (k === 'soc' || k === 'bat_soc') { if (Math.abs((a ?? 0) - (b ?? 0)) >= 1) changed[k] = [a, b]; }
+        else if (a !== b)        { changed[k] = [a, b]; }
+      }
+      if (Object.keys(changed).length) {
+        this._appendStateLog({ event: 'change', changed, snap });
+        this._stateSnap = snap;
+      }
+    } catch (err) { this.app.error('[Tesla] statelog:', err.message); }
+  }
+
+  _appendStateLog(rec) {
+    try {
+      const now = new Date();
+      rec.ts = now.toISOString();
+      try { rec.ts_local = this.app.localTime(); } catch (_) { rec.ts_local = now.toISOString(); }
+      const day = rec.ts.substring(0, 10).replace(/-/g, '');
+      fs.appendFileSync(path.join(STATELOG_DIR, `tesla-statelog-${day}.jsonl`), JSON.stringify(rec) + '\n');
+    } catch (err) { this.app.error('[Tesla] statelog write:', err.message); }
   }
 
   /**
@@ -432,14 +531,13 @@ class TeslaEvAdapter extends Vehicle {
   async _getTeslaAppState() {
     if (!this._teslaDeviceId) return null;
 
-    // B5: serve from cache when fresh — SoC/range change at most every 10-30 min.
-    // Connected/charging state is also cached but invalidated immediately on
-    // transitions so real-time control remains accurate.
+    // ALTIJD vers lezen: `device.capabilitiesObj` zijn Homey's laatst-bekende waarden
+    // (de com.tesla-app pollt zelf de cloud) — dit kost GEEN Fleet-API-call. De oude
+    // 10-min cache voegde alleen vertraging toe: een net-begonnen laadsessie bleef
+    // "Stopped" tot de cache verliep, en de transitie-invalidatie kon nooit aanslaan
+    // omdat de cache de transitie zelf maskeerde (kip-en-ei). Cache nu enkel als
+    // fallback bij een leesfout.
     const now = Date.now();
-    if (this._vehicleStateCache && (now - this._vehicleStateCacheTs) < this._vehicleStateCacheTTL) {
-      return this._vehicleStateCache;
-    }
-
     try {
       const device = await this.app.getDevice(this._teslaDeviceId);
       const caps   = device.capabilitiesObj;

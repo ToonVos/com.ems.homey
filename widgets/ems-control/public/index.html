@@ -54,6 +54,7 @@
     .pr-row  { font-size: 12px; opacity: .75; line-height: 1.3; }
     .pr-head { font-size: 13.5px; font-weight: 700; opacity: .95; }
     .pr-muted{ opacity: .55; }
+    .pr-conn { opacity: .9; font-weight: 600; }
     .pr-foot { opacity: .45; font-size: 10px; }
     .proj .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
     .dot-on  { background: #22c55e; }
@@ -164,6 +165,23 @@
       return m ? `${m[1].padStart(2,'0')}:${m[2]}` : '?';
     }
 
+    // Verbinding: toont of de auto is aangekoppeld. Bij actief laden voegen we '⚡ laadt'
+    // toe als positieve bevestiging — maar NOOIT 'geen laadstroom' als de auto niet laadt:
+    // niet-laden is meestal het bedoelde gedrag (Spaarstand/wachten) en de reden staat al
+    // in de hoofdstatus. Een 'geen laadstroom'-melding zou ten onrechte een storing suggereren.
+    function connRow(sc) {
+      if (!sc) return '';
+      if (sc.connected === false)
+        return `<div class="pr-row pr-conn"><span class="dot dot-off"></span>🔌 niet aangekoppeld</div>`;
+      if (sc.connected !== true) return '';   // onbekend → niets tonen
+      // NoPower = kabel ingeplugd maar geen stroom op de kabel (laadpunt uit / rode kabel).
+      // Dit is wél een fixbaar probleem → tonen (i.t.t. het normale niet-laden).
+      if (sc.no_power === true)
+        return `<div class="pr-row pr-conn"><span class="dot dot-warn"></span>🔌 aangekoppeld · ⚠️ geen stroom op kabel — laadpunt aan?</div>`;
+      const laadt = sc.charging_actual === true ? ' · ⚡ laadt' : '';
+      return `<div class="pr-row pr-conn"><span class="dot dot-on"></span>🔌 aangekoppeld${laadt}</div>`;
+    }
+
     function renderProj(s) {
       const el = $('proj');
       const sc = s.scheduler;
@@ -177,6 +195,7 @@
         const modusF = sc.mode === 'dryrun' ? '🧪 proef' : '🟢 live';
         el.innerHTML =
           `<div class="pr-row pr-head"><span class="dot dot-on"></span>🍃 Spaarstand ${s.hold_target ?? 55}%</div>` +
+          connRow(sc) +
           `<div class="pr-row">doel ${s.target_pct}% gepland voor ${datum}</div>` +
           `<div class="pr-row pr-muted">start in de goedkoopste uren ~7 dagen ervoor</div>` +
           `<div class="pr-row pr-foot">${modusF}${sc.updated_local ? ` · ${shortWhen(sc.updated_local)}` : ''}</div>`;
@@ -195,6 +214,13 @@
       else                                           { dot = 'dot-warn'; icon = '⏳'; head = surplus ? 'Wacht op zon-overschot' : 'Wacht op goedkoper uur'; }
 
       const rows = [`<div class="pr-row pr-head"><span class="dot ${dot}"></span>${icon} ${head}</div>`];
+
+      // Verbinding + laadstroom expliciet, behalve als de head dat al zegt
+      // (skip_disconnected toont al "Auto niet verbonden").
+      if (sc.decision !== 'skip_disconnected') {
+        const cr = connRow(sc);
+        if (cr) rows.push(cr);
+      }
 
       if (sc.connected && surplus) {
         // Overschot+prijs-modus (post-saldering).

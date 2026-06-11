@@ -37,8 +37,10 @@ Actief alleen bij **laadmodus `price`** én **dynamisch contract**. Per 60s:
 5. **Laad nu?** = huidig slot ∈ selectie · OR SoC ≤ bodem (PANIC) · OR (deadline voorbij
    && doel niet gehaald → doorladen; SoC-garantie wint van tijd).
 6. **Sturen** (live) of alleen loggen (proef), met idle-skip op ongewijzigde wens.
-7. **Verifiëren:** 3 min na een commando wordt de werkelijke laadtoestand gelezen; klopt
-   die niet → `car_wake_up` + opnieuw sturen (max 2×), daarna notificatie.
+7. **Verifiëren:** elke cyclus wordt de werkelijke laadtoestand (Tesla-boolean) vergeleken
+   met de wens; klopt het niet → eerst zacht herproberen, ~1 min later wake-en-online-wachten
+   + opnieuw sturen (escalatie tot enkele pogingen), daarna notificatie. Zie "Sturing &
+   robuustheid (v1.8)" hieronder.
 
 ### Batterijgezondheid-bewaking (`ev_battery_health`, default aan)
 Houdt de NCA-pack langer goed door hoge SoC niet lang vast te houden. Per band ander venster:
@@ -140,6 +142,30 @@ door tot z'n eigen limiet**, en losse start/stop-commando's falen dan met
   (wake = $0,02 = 20× een commando; commando $0,001; data $0,002 — $10/maand gratis per
   Tesla-account). Backoff na een mislukt commando, opgeven + melden na enkele pogingen.
 
+## Sturing & robuustheid (v1.8 — gerijpt op echte data)
+
+Uit live-tests in juni 2026 bleek dat de datavoorziening, niet de logica, de bottleneck was.
+Aangescherpt (volledige rationale: brein-repo `tasks/design/d07-laadtijd-leermodel.md` + `tasks/lessons.md`):
+
+- **Laad-detectie = de Tesla-boolean.** "Laadt hij?" komt uit `charging_on`/`charging_state`
+  van de auto, **niet** uit `measure_charge_power` — die kan in beide richtingen stale zijn
+  (10 kW terwijl charging_on=false; of 3 kW blijven hangen ná de stop → ten onrechte een wake).
+  De oude 10-min adapter-cache is verwijderd: capability-reads zijn gratis en altijd vers.
+- **Home-gate:** alleen sturen als de auto **thuis** is. **DC-snelladen** (`measure_charge_power_dc>0`,
+  Supercharger) = onderweg → handen af, zodat onderweg-laden tot je gekozen waarde blijft werken.
+- **NoPower (rode kabel):** `charging_state='NoPower'` = kabel ingeplugd maar geen stroom op de
+  kabel (laadpunt uit). Dan **niet** sturen (zinloos) maar **éénmalig waarschuwen** + in de widget tonen.
+- **Wake-discipline:** na `car_wake_up` **wachten tot `car_state='online'`** vóór een commando
+  (anders `could_not_wake_buses` + extra wake). Bij een START van een slapende auto meteen wekken;
+  bij een gepland slot de wake **vooruit** plaatsen zodat het laden op tijd begint. Stop = eerst zacht,
+  ~1 min later kijken, dan wake + hard stoppen; limiet-fail-safe richting huidige SoC.
+- **Lerend laadtijd-model:** `tijd = wake + overhead + ΔSoC·min_per_procent(temp)`. Snelheid geleerd
+  per `module_temp`-bucket (winter trager), overhead per sessie, wektijd. Priors = oude aanname →
+  identiek bij nul data, daarna zelf-verbeterend.
+- **Aaneengesloten-bewuste slot-keuze:** minimaliseert `Σ energieprijs + n_sessies × C_session`
+  (`ev_session_cost_eur`, €0.10). Doorladen waar goedkope uren aansluiten; splitsen alleen om een
+  dure tussenpiek als de besparing > sessie-kosten.
+
 ## Laadmodi
 
 | Modus | Wanneer | Gedrag |
@@ -157,8 +183,11 @@ melding hooguit 1×/30 min.
 
 ## Diagnose-API (api.js)
 
-`getTeslaScheduler` (ring), `getTuningReport` (week-samenvatting), `getUserdataFile`
-(lees `/userdata`-logs) — voor terugwerkende analyse.
+`getTeslaScheduler` (ring met beslissingen incl. `car_state`/`charge_power_kw`/`no_power`/
+`away_dc`/`wake_secs`), `getTeslaStateLog` (Tesla state-changes + live snapshot),
+`getTeslaLearn` (geleerde snelheid per temp-bucket, overhead, wektijd + laatste sessies),
+`getTuningReport` (week-samenvatting), `getUserdataFile` (lees `/userdata`-logs:
+`teslasched-*.jsonl`, `tesla-statelog-*.jsonl`, `tesla-sessions.jsonl`) — voor terugwerkende analyse.
 
 > Ontwerp & rationale: zie de brein-repo `ems-homey` (`docs/ARCHITECTURE.md`,
 > `tasks/phase-3/3.4-fork-implementatieplan.md`).

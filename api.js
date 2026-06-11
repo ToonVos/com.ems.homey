@@ -170,6 +170,55 @@ module.exports = {
     } catch (e) { return { error: e.message }; }
   },
 
+  // Debug: Tesla state-change-log (date/time per wijziging) + live snapshot.
+  // Query: ?date=YYYYMMDD (default vandaag), ?tail=N (default 200).
+  async getTeslaStateLog({ homey, query }) {
+    const fs = require('fs'); const path = require('path');
+    try {
+      const tz   = homey.clock?.getTimezone?.() ?? 'Europe/Amsterdam';
+      const loc  = new Date(new Date().toLocaleString('en-US', { timeZone: tz }));
+      const dflt = `${loc.getFullYear()}${String(loc.getMonth() + 1).padStart(2, '0')}${String(loc.getDate()).padStart(2, '0')}`;
+      const date = (query && query.date) || dflt;
+      const file = path.join('/userdata', `tesla-statelog-${date}.jsonl`);
+
+      let lines = [];
+      try {
+        const txt = fs.readFileSync(file, 'utf8').trim();
+        const all = txt ? txt.split('\n') : [];
+        const n   = Number((query && query.tail) || 200);
+        lines = all.slice(-n).map(l => { try { return JSON.parse(l); } catch (_) { return l; } });
+      } catch (_) { /* nog geen log vandaag */ }
+
+      const live = await homey.app.ems?.tesla?.getState().catch(() => null);
+      return { ok: true, date, file, count: lines.length, live, entries: lines };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  },
+
+  // Fase A: lerende parameters (laadsnelheid per temp-bucket, overhead, wektijd) + sessie-log.
+  async getTeslaLearn({ homey }) {
+    const fs = require('fs'); const path = require('path');
+    const s = homey.settings;
+    const buckets = ['lt5', '5_15', '15_25', 'gt25', 'unknown'];
+    const rates = {};
+    buckets.forEach(b => { rates[b] = s.get(`tesla_learn_rate_${b}`) ?? null; });
+    let sessions = [];
+    try {
+      const txt = fs.readFileSync(path.join('/userdata', 'tesla-sessions.jsonl'), 'utf8').trim();
+      sessions = (txt ? txt.split('\n') : []).slice(-30).map(l => { try { return JSON.parse(l); } catch (_) { return l; } });
+    } catch (_) { /* nog geen sessies */ }
+    return {
+      ok: true,
+      rate_kwh_h_global: s.get('tesla_observed_kwh_per_h') ?? null,
+      rate_kwh_h_by_temp: rates,
+      overhead_min: s.get('tesla_learn_overhead_min') ?? null,
+      wake_secs: s.get('tesla_learn_wake_secs') ?? null,
+      session_count: sessions.length,
+      sessions,
+    };
+  },
+
   async getEvDiag({ homey }) {
     try {
       const ems   = homey.app.ems;
