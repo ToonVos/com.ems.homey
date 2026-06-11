@@ -232,6 +232,28 @@
             }
           }
         ]
+      },
+      {
+        "id": "ev_no_power",
+        "title": {
+          "en": "EV: no power on the cable",
+          "nl": "EV: geen stroom op de kabel"
+        },
+        "hint": {
+          "en": "Triggers when the Tesla is plugged in but there is no power on the cable (charge point off / red cable).",
+          "nl": "Triggert als de Tesla is aangekoppeld maar er geen stroom op de kabel staat (laadpunt uit / rode kabel)."
+        }
+      },
+      {
+        "id": "ev_power_restored",
+        "title": {
+          "en": "EV: power restored on the cable",
+          "nl": "EV: stroom terug op de kabel"
+        },
+        "hint": {
+          "en": "Triggers when power returns to the cable after a no-power situation.",
+          "nl": "Triggert als er weer stroom op de kabel staat na een no-power-situatie."
+        }
       }
     ],
     "conditions": [

@@ -22,6 +22,10 @@ class FlowManager {
     this.homey.on('ems:dumpLoadActivated',    ()      => trigger('dump_load_activated').trigger());
     this.homey.on('ems:dumpLoadDeactivated',  ()      => trigger('dump_load_deactivated').trigger());
     this.homey.on('ems:heatpumpModeChanged',  mode    => { trigger('heatpump_mode_switched').trigger({ mode }); notify(`🌡️ Warmtepomp omgeschakeld naar ${mode === 'cooling' ? 'koelen' : 'verwarmen'}`, 'heatpump'); });
+    // Tesla aangekoppeld maar geen stroom op de kabel (laadpunt uit / rode kabel). Melding doet
+    // de scheduler al; hier alleen de flow-trigger zodat de gebruiker eigen automatiseringen kan maken.
+    this.homey.on('ems:evNoPower',            ()      => trigger('ev_no_power').trigger());
+    this.homey.on('ems:evPowerRestored',      ()      => trigger('ev_power_restored').trigger());
 
     // EV charging started/stopped
     this.homey.on('ems:evChargingStarted',    data    => {

@@ -465,7 +465,10 @@ class TeslaScheduler {
       awayDc = dc;
       chargePowerKw = powerKw;
       noPowerOnCable = noPower;
-      if (!noPower) this._noPowerNotified = false;   // reset zodra er weer stroom op de kabel staat
+      if (!noPower) {
+        if (this._noPowerNotified) this.homey.emit('ems:evPowerRestored');  // stroom terug op de kabel
+        this._noPowerNotified = false;   // reset zodra er weer stroom op de kabel staat
+      }
       // Home-gate: alleen sturen als de auto THUIS is. DC-snelladen = Supercharger =
       // onderweg → handen af, zodat onderweg-laden tot gekozen waardes blijft werken
       // (overbruggen kan altijd via geplande lading in de Tesla-app). AC = thuis.
@@ -544,6 +547,7 @@ class TeslaScheduler {
             '🔌 Tesla is aangekoppeld maar er staat geen stroom op de kabel (laadpunt uit / rode kabel). Zet het laadpunt aan zodat ik kan laden.',
             'tesla'
           );
+          this.homey.emit('ems:evNoPower');   // flow-trigger "geen stroom op kabel"
         }
       } else if (mismatch && due) {
         this._mismatchStreak = wishChanged ? 1 : streak + 1;
