@@ -174,6 +174,28 @@ Aangescherpt (volledige rationale: brein-repo `tasks/design/d07-laadtijd-leermod
 | `surplus` | **post-saldering** | Gecombineerd (`_tickCombi`): verplicht doel via goedkoopste uren **of gratis overschot**; daarboven (→plafond) **uitsluitend** op zonne-overschot, geen netinkoop. Behoudend (aanhoudend overschot, min aan/uit, amp-hysterese — wear-veilig). |
 | Menno's `solar_*`/`fixed`/`off` | — | Onaangeroerd; EvController haakt af bij `price`/`surplus`. |
 
+## Energie-boekhouding & Homey Energy (v1.9)
+
+- **`services/EnergyLedger.js`** (observe-only): dagelijkse energie-boekhouding. **Bruto**
+  dag-import/export uit de aparte fiscale-P1-registers (`meter_power.imported`/`exported`)
+  via middernacht-snapshot — géén saldering; `partial`-vlag tot de eerste volledige dag.
+  Zon/accu/handel uit full-day device-tellers; verbruik uit de sluitende balans
+  (`pv + grid + accu`); **huishouden = verbruik − EV**. €-waardering tegen instelbare
+  prijs-componenten (zie hieronder), op **post-saldering (2027)**-basis (beslis-simulatie).
+  Endpoint `getEnergyLedger`; JSONL `/userdata/energy-ledger.jsonl`.
+- **Prijs-componenten instelbaar** (instellingen → Dynamisch contract): `price_energy_tax_eur`
+  (€0,1108), `price_supplier_fee_eur` (€0,0199892), `price_btw_factor` (1,21),
+  `price_export_bonus_eur` (0,02), `price_export_factor` (1,10), `ev_session_cost_eur` (0,10).
+  Import = `kale × btw + belasting + opslag`; export = `(kale + bonus) × factor`.
+- **`drivers/ev-charger`** (class `evcharger`): "Tesla thuislading" — voedt het
+  thuislaadvermogen (uit de scheduler, gegate op de Tesla-boolean; DC/onderweg uitgesloten)
+  + cumulatieve `meter_power` aan **Homey Energy**. Daardoor toont Energy de EV-laadbeurt en
+  wordt "Overig" het échte huishouden, zonder dubbeltelling (P1 = cumulatieve grid-referentie).
+- **`toon_fasen`-setting** (default uit): verbergt de per-fase-tiles (`pv_l1..`/`grid_l1..`) —
+  er is geen echte per-fase data (PV-totaal-only; P1 alleen L1).
+- **NoPower-flow-triggers**: `ev_no_power` / `ev_power_restored` (rode kabel / laadpunt uit).
+- Vereist Homey **≥12.4.5** (evcharger-capabilities).
+
 ## Tijdlijn-meldingen
 
 `NotificationManager` met **categorieën** (`plan`, `battery`, `session`, `ev`, `heatpump`,
@@ -186,6 +208,7 @@ melding hooguit 1×/30 min.
 `getTeslaScheduler` (ring met beslissingen incl. `car_state`/`charge_power_kw`/`no_power`/
 `away_dc`/`wake_secs`), `getTeslaStateLog` (Tesla state-changes + live snapshot),
 `getTeslaLearn` (geleerde snelheid per temp-bucket, overhead, wektijd + laatste sessies),
+`getEnergyLedger` (dag-boekhouding: verbruik/huishouden/EV/zon/import/export/handel + RTE),
 `getTuningReport` (week-samenvatting), `getUserdataFile` (lees `/userdata`-logs:
 `teslasched-*.jsonl`, `tesla-statelog-*.jsonl`, `tesla-sessions.jsonl`) — voor terugwerkende analyse.
 
