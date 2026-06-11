@@ -1,7 +1,7 @@
 {
   "id": "com.ems.homey",
   "version": "1.8.0",
-  "compatibility": ">=12.1.0",
+  "compatibility": ">=12.4.5",
   "sdk": 3,
   "brandColor": "#0d1f3c",
   "name": {
@@ -648,47 +648,74 @@
       ],
       "capabilitiesOptions": {
         "measure_power.pv": {
-          "title": { "en": "Solar total", "nl": "Zon totaal" },
+          "title": {
+            "en": "Solar total",
+            "nl": "Zon totaal"
+          },
           "decimals": 0,
           "insights": false
         },
         "measure_power.pv_l1": {
-          "title": { "en": "Solar L1", "nl": "Zon L1" },
+          "title": {
+            "en": "Solar L1",
+            "nl": "Zon L1"
+          },
           "decimals": 0,
           "insights": false
         },
         "measure_power.pv_l2": {
-          "title": { "en": "Solar L2", "nl": "Zon L2" },
+          "title": {
+            "en": "Solar L2",
+            "nl": "Zon L2"
+          },
           "decimals": 0,
           "insights": false
         },
         "measure_power.pv_l3": {
-          "title": { "en": "Solar L3", "nl": "Zon L3" },
+          "title": {
+            "en": "Solar L3",
+            "nl": "Zon L3"
+          },
           "decimals": 0,
           "insights": false
         },
         "measure_power.grid": {
-          "title": { "en": "Grid total", "nl": "Net totaal" },
+          "title": {
+            "en": "Grid total",
+            "nl": "Net totaal"
+          },
           "decimals": 0,
           "insights": false
         },
         "measure_power.grid_l1": {
-          "title": { "en": "Grid L1", "nl": "Net L1" },
+          "title": {
+            "en": "Grid L1",
+            "nl": "Net L1"
+          },
           "decimals": 0,
           "insights": false
         },
         "measure_power.grid_l2": {
-          "title": { "en": "Grid L2", "nl": "Net L2" },
+          "title": {
+            "en": "Grid L2",
+            "nl": "Net L2"
+          },
           "decimals": 0,
           "insights": false
         },
         "measure_power.grid_l3": {
-          "title": { "en": "Grid L3", "nl": "Net L3" },
+          "title": {
+            "en": "Grid L3",
+            "nl": "Net L3"
+          },
           "decimals": 0,
           "insights": false
         },
         "measure_power.ev": {
-          "title": { "en": "EV charging", "nl": "EV laden" },
+          "title": {
+            "en": "EV charging",
+            "nl": "EV laden"
+          },
           "decimals": 0,
           "insights": false
         }
@@ -702,7 +729,9 @@
         {
           "id": "list_devices",
           "template": "list_devices",
-          "navigation": { "next": "add_devices" }
+          "navigation": {
+            "next": "add_devices"
+          }
         },
         {
           "id": "add_devices",
@@ -713,13 +742,67 @@
         {
           "id": "ems_mode",
           "type": "dropdown",
-          "label": { "en": "EMS mode", "nl": "EMS modus" },
-          "hint": { "en": "Auto: EMS manages everything. Idle: EMS paused.", "nl": "Auto: EMS beheert alles. Inactief: EMS gepauzeerd." },
+          "label": {
+            "en": "EMS mode",
+            "nl": "EMS modus"
+          },
+          "hint": {
+            "en": "Auto: EMS manages everything. Idle: EMS paused.",
+            "nl": "Auto: EMS beheert alles. Inactief: EMS gepauzeerd."
+          },
           "value": "auto",
           "values": [
-            { "id": "auto", "label": { "en": "Auto",  "nl": "Automatisch" } },
-            { "id": "idle", "label": { "en": "Idle",  "nl": "Inactief" } }
+            {
+              "id": "auto",
+              "label": {
+                "en": "Auto",
+                "nl": "Automatisch"
+              }
+            },
+            {
+              "id": "idle",
+              "label": {
+                "en": "Idle",
+                "nl": "Inactief"
+              }
+            }
           ]
+        }
+      ]
+    },
+    {
+      "id": "ev-charger",
+      "name": {
+        "en": "Tesla home charging",
+        "nl": "Tesla thuislading"
+      },
+      "class": "evcharger",
+      "capabilities": [
+        "measure_power",
+        "meter_power",
+        "evcharger_charging",
+        "evcharger_charging_state"
+      ],
+      "energy": {
+        "evCharger": true,
+        "meterPowerImportedCapability": "meter_power"
+      },
+      "images": {
+        "small": "/drivers/ev-charger/assets/images/small.png",
+        "large": "/drivers/ev-charger/assets/images/large.png",
+        "xlarge": "/drivers/ev-charger/assets/images/xlarge.png"
+      },
+      "pair": [
+        {
+          "id": "list_devices",
+          "template": "list_devices",
+          "navigation": {
+            "next": "add_devices"
+          }
+        },
+        {
+          "id": "add_devices",
+          "template": "add_devices"
         }
       ]
     }
@@ -727,7 +810,10 @@
   "capabilities": {
     "ems_status": {
       "type": "string",
-      "title": { "en": "Status", "nl": "Status" },
+      "title": {
+        "en": "Status",
+        "nl": "Status"
+      },
       "getable": true,
       "setable": false,
       "uiComponent": "sensor",
@@ -737,7 +823,10 @@
     },
     "ems_mode": {
       "type": "string",
-      "title": { "en": "Mode", "nl": "Modus" },
+      "title": {
+        "en": "Mode",
+        "nl": "Modus"
+      },
       "getable": true,
       "setable": false,
       "uiComponent": "sensor",

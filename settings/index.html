@@ -64,6 +64,7 @@
           Homey.get('ev_charge_mode'),
           Homey.get('ev_night_charge'),
           Homey.get('ev_battery_health'),
+          Homey.get('toon_fasen'),
         ]);
       }).then(function(vals) {
         toggleDynamic(vals[0] || 'fixed');
@@ -75,6 +76,8 @@
         }
         var hb = document.getElementById('ev_battery_health');
         if (hb) hb.checked = vals[4] == null ? true : !!vals[4];   // default aan
+        var tf = document.getElementById('toon_fasen');
+        if (tf) tf.checked = vals[5] == null ? false : !!vals[5];  // default uit
         showNightSection();
         updatePvTotal();
         loadNotifyToggles();
@@ -269,7 +272,7 @@
             }
             saveDeviceSettings();
           } else {
-            if (el.id.indexOf('ev_home_') === 0 || el.id === 'ev_battery_health' || el.id.indexOf('notify_') === 0) {
+            if (el.id.indexOf('ev_home_') === 0 || el.id === 'ev_battery_health' || el.id === 'toon_fasen' || el.id.indexOf('notify_') === 0) {
               _Homey.set(el.id, el.checked).then(showSaved).catch(function(e) {
                 console.error('[EMS settings] save error:', el.id, e);
               });
@@ -620,6 +623,12 @@
       <label>PV-meter apparaat</label>
       <p class="hint">De kWh-meter op je omvormer (bijv. output van Growatt, SolarEdge).</p>
       <select id="pvMeterIds"><option value="">— Geen —</option></select>
+    </div>
+
+    <div class="field" style="margin-top:8px">
+      <input type="checkbox" id="toon_fasen" />
+      <label for="toon_fasen">Per-fase tiles tonen (L1/L2/L3)</label>
+      <p class="hint">Standaard uit. Alleen zinvol als je écht per-fase meet; anders blijven PV-fasen leeg en toont het net alleen L1.</p>
     </div>
 
     <p class="hint">Piekvermogen van je installatie. Bij 3-fase installaties per fase invullen.</p>

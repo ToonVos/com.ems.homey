@@ -19,8 +19,29 @@ class EmsControllerDevice extends Device {
     // Register this device so EmsManager can push state updates
     this.homey.app.setEmsControllerDevice(this);
 
+    // Per-fase-tiles tonen/verbergen op basis van de setting (default: verbergen — de meeste
+    // setups hebben geen echte per-fase data; alleen L1 via P1, PV-fasen leeg → misleidend).
+    await this._reconcilePhaseCaps();
+    this.homey.settings.on('set', (key) => {
+      if (key === 'toon_fasen') this._reconcilePhaseCaps().catch((e) => this.error('[EmsDevice] reconcile:', e.message));
+    });
+
     // Start EMS with the config stored from pairing
     await this._startEms();
+  }
+
+  /** Voegt de per-fase-capabilities toe of verwijdert ze, afhankelijk van setting `toon_fasen`. */
+  async _reconcilePhaseCaps() {
+    const show = this.homey.settings.get('toon_fasen') === true;   // default false
+    const phaseCaps = [
+      'measure_power.pv_l1', 'measure_power.pv_l2', 'measure_power.pv_l3',
+      'measure_power.grid_l1', 'measure_power.grid_l2', 'measure_power.grid_l3',
+    ];
+    for (const cap of phaseCaps) {
+      const has = this.hasCapability(cap);
+      if (show && !has)  await this.addCapability(cap).catch((e) => this.error(`[EmsDevice] addCapability ${cap}:`, e.message));
+      if (!show && has)  await this.removeCapability(cap).catch((e) => this.error(`[EmsDevice] removeCapability ${cap}:`, e.message));
+    }
   }
 
   // ─── Start / restart EMS with current device config ───────────────────────
