@@ -63,13 +63,23 @@ Eén horizon op 15-min resolutie, all-in (`kale × 1,21 + €0,13085`), in voork
 De **7-daagse voorspeller is gekoppeld aan het dynamische contract**: bij vast tarief
 bestaat "goedkoopste uur" niet → niet ophalen, prijs-modus verborgen.
 
-## Sturing zonder handmatige flows
+## Sturing (capabilities + trigger-bruggen)
 
-De scheduler roept de **device-flow-acties van de Tesla-app rechtstreeks** aan via
-`runFlowCardAction` (geen door de gebruiker gekoppelde flow nodig):
-`charge_limit` (50–100), `charge_current` (0–32A), `charging_on` ({start,stop}),
-`car_wake_up` ({wait}). Command-zuinig: limiet/amps alleen bij wijziging, start/stop alleen
-op transitie.
+Een Homey-**app kan géén flow-acties van een ander device draaien**: `runFlowCardAction`
+vereist scope `homey.flow`, die een app niet krijgt → **"Missing Scopes"**. Settable
+capabilities (scope `homey.device.control`) werken wél. Daarom (v1.9.1):
+
+- **Start/stop laden** → settable capability `charging_on` (betrouwbaar, direct).
+- **Wekken** → settable capability `car_wake_up` (boolean). (Vóór v1.9.1 ging dit via de
+  flow-actie en faalde het stil → de auto kwam vroeger "vanzelf" online.)
+- **Laadlimiet** (`charge_limit`, 50–100) en **laadstroom** (`charge_current`, 0–32A) hebben
+  **geen** settable capability → via een **trigger-brug**: de scheduler `emit`'t
+  `ems:setEvChargeLimit` / `ems:setEvChargeCurrent`; de gebruiker koppelt die éénmalig aan de
+  Tesla-acties "Stel Laadlimiet SoC in" / "Stel laadstroom in". (Het limiet-arg is type
+  `range`/schuifbalk → token niet kiesbaar in de flow-editor; de flow is via de API met
+  `"limit":"[[limit]]"` aangemaakt en werkt at runtime.)
+
+Command-zuinig: limiet/amps alleen bij wijziging, start/stop alleen op transitie.
 
 De **laadsnelheid-observer** meet tijdens het laden de echte ΔSoC/tijd (EWMA in
 `tesla_observed_kwh_per_h`) en gebruikt dat voor "hoeveel uren nodig"; tot er data is
@@ -132,10 +142,15 @@ Tesla-commando's vergen een wakkere auto; een **slapende, ingeplugde Tesla laadt
 door tot z'n eigen limiet**, en losse start/stop-commando's falen dan met
 `could_not_wake_buses`. Daarom:
 
-- **Laadlimiet = ons doel als hoofd-stop.** De scheduler zet `charge_limit` op het
-  actuele stop-punt (verplicht doel / plafond / huidige SoC) — de auto stopt dan
-  **zelf**, ook slapend ladend. Start/stop (`charging_on`-capability) is secundair, voor
-  de timing.
+- **Laadlimiet = hoofdsturing (hold-model, v1.9.1).** De scheduler zet `charge_limit` op het
+  **niveau-voor-nu**: het **hold-niveau** (Spaarstand `ev_vacation_soc`, 55%) zolang we nog niet
+  naar het eind-doel laden — mét laden aan, zodat de auto **zichzelf op 55% houdt** — en het
+  **eind-doel** (bv. 80%) zodra het goedkoopste laad-venster vóór de deadline aanbreekt. Formule:
+  `limitTarget = (want || soc>holdPct) ? capPct : holdPct`. De timing van 55→80 = wanneer we de
+  limiet ophogen; een dure tussenpiek binnen de laad-fase overbruggen we nog met `charging_on`
+  start/stop (limiet blijft op het doel). De auto stopt **zelf** op de limiet, ook slapend ladend
+  → een gemiste stop betekent hooguit doorladen tot de huidige bovengrens, nooit naar de
+  auto-eigen 82%. Decision-labels `hold` / `hold_charge`.
 - **Reconcile elke cyclus:** vergelijk gewenst vs werkelijk laden en stuur bij tot het
   klopt (niet alleen op een eigen toestand-wissel).
 - **Wake-bewust + credit-veilig:** `car_state` is **gratis** te checken; pas dán wekken
