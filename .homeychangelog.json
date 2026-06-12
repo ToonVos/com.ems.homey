@@ -1,4 +1,8 @@
 {
+  "1.9.1": {
+    "en": "Fix: EV charging energy is now booked reliably (from the car's own session energy charge_energy_added, DC, converted to grid AC via an adjustable charge efficiency) instead of the often-zero live power meter — so household-vs-EV split and Homey Energy attribution finally work. Charge limit + wake fixed: an app cannot run another device's flow actions ('Missing Scopes'), so waking now uses the settable car_wake_up capability, and the charge limit (target SoC) is set via a new 'EMS wants to set EV charge limit' trigger you wire to the Tesla 'Set charge limit' action — the car then self-stops at the target, even asleep.",
+    "nl": "Fix: EV-laadenergie wordt nu betrouwbaar geboekt. Het wordt gelezen uit de sessie-energie van de auto zelf (charge_energy_added, DC), omgerekend naar de net-kant (AC) via een instelbare laadefficiëntie, i.p.v. de vaak-nul live vermogensmeter — zodat de huishouden-vs-EV-splitsing en de Homey Energy-toerekening eindelijk kloppen. Eén bron van waarheid, gedeeld door de energie-ledger en het device 'Tesla thuislading'. Laadlimiet + wake gefixt: een app kan flow-acties van een ander device niet draaien ('Missing Scopes'), dus wekken gaat nu via de settable capability car_wake_up, en de laadlimiet (doel-SoC) wordt gezet via een nieuwe trigger 'EMS wil EV laadlimiet instellen' die je koppelt aan de Tesla-actie 'Stel Laadlimiet SoC in' — de auto stopt dan zelf op het doel, ook slapend."
+  },
   "1.0.0": {
     "en": "Initial release. Solar, battery, EV (Tesla + Wall Connector) and heat pump management with daily planning based on weather forecast.",
     "nl": "Eerste versie. Zonnepanelen, batterij, EV (Tesla + Wall Connector) en warmtepomp-beheer met dagplanning op basis van weersvoorspelling."

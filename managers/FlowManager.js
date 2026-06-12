@@ -47,6 +47,11 @@ class FlowManager {
     // EV charge control — user wires these trigger cards to Tesla flow actions
     // "When EMS wants to set EV charge current [current A] → Tesla: Stel laadstroom in op [current]"
     this.homey.on('ems:setEvChargeCurrent',   amps    => trigger('ev_set_charge_current').trigger({ current: amps }));
+    // Laadlimiet (doel-SoC): de app kan de Tesla-limiet niet zelf zetten (flow-acties van een
+    // ander device vereisen de homey.flow-scope → "Missing Scopes"). Daarom via een trigger die
+    // de gebruiker koppelt aan de Tesla-actie "Stel Laadlimiet SoC in". De auto stopt dan zelf op
+    // dit % — ook slapend — zodat we tijdens een lange hold (bv. Spaarstand 55%) geen stops sturen.
+    this.homey.on('ems:setEvChargeLimit',     limit   => trigger('ev_set_charge_limit').trigger({ limit }));
     // Two separate triggers for start and stop — simpler than a boolean token
     // "When EMS wants to start EV charging → Tesla: Start het opladen"
     // "When EMS wants to stop EV charging  → Tesla: Stop het opladen"

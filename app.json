@@ -1,6 +1,6 @@
 {
   "id": "com.ems.homey",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "compatibility": ">=12.4.5",
   "sdk": 3,
   "brandColor": "#0d1f3c",
@@ -165,6 +165,27 @@
             "title": {
               "en": "Current (A)",
               "nl": "Laadstroom (A)"
+            }
+          }
+        ]
+      },
+      {
+        "id": "ev_set_charge_limit",
+        "title": {
+          "en": "EMS wants to set EV charge limit",
+          "nl": "EMS wil EV laadlimiet instellen"
+        },
+        "hint": {
+          "en": "Fires whenever the EMS sets a new charge-limit (target SoC). Connect this to the 'Set charge limit' action of your Tesla app so the car self-stops at this %.",
+          "nl": "Triggert telkens als de EMS een nieuwe laadlimiet (doel-SoC) bepaalt. Koppel dit aan de 'Stel Laadlimiet SoC in'-actie van je Tesla-app, zodat de auto zichzelf op dit % stopt."
+        },
+        "tokens": [
+          {
+            "name": "limit",
+            "type": "number",
+            "title": {
+              "en": "Charge limit (%)",
+              "nl": "Laadlimiet (%)"
             }
           }
         ]

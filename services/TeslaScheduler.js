@@ -204,11 +204,16 @@ class TeslaScheduler {
     let dc = false;
     let powerKw = null;
     let noPower = false;
+    let chargeAdded = null;
     try {
       const dev = await this.app.getDevice(this._teslaBatId());
       const c = dev?.capabilitiesObj || {};
       const p = c.measure_charge_power?.value;
       powerKw = (typeof p === 'number') ? p : null;
+      // Sessie-laadenergie aan de batterij (DC, ná laadverlies) — grondwaarheid voor de
+      // EV-boeking; reset naar 0 bij een nieuwe sessie. Veel betrouwbaarder dan measure_charge_power
+      // (die meldt vaak 0 terwijl charging_on=true). Zie EnergyLedger + ev-charger-device.
+      if (typeof c.measure_charge_energy_added?.value === 'number') chargeAdded = c.measure_charge_energy_added.value;
       if (typeof c.measure_charge_limit_soc?.value === 'number') limit = c.measure_charge_limit_soc.value;
       if ((c.measure_charge_power_dc?.value ?? 0) > 0.1) dc = true;   // DC-vermogen alleen voor onderweg-detectie
       const stateText = c.charging_state?.value != null ? String(c.charging_state.value).toLowerCase() : null;
@@ -219,7 +224,32 @@ class TeslaScheduler {
       // i.t.t. 'Stopped' (stroom beschikbaar, gepauzeerd → blauwe kabel). Starten is dan zinloos.
       noPower = stateText ? stateText.replace(/\s/g, '') === 'nopower' : false;
     } catch (_) { /* velden blijven null */ }
-    return { charging, limit, dc, powerKw, noPower };
+    return { charging, limit, dc, powerKw, noPower, chargeAdded };
+  }
+
+  /**
+   * Boekt EV-laadenergie betrouwbaar uit `measure_charge_energy_added` (sessie-DC, reset per
+   * sessie) en houdt één monotone cumulatieve AC-teller bij (= de netafname voor het laden):
+   * AC = DC ÷ laadefficiëntie. Dit is dé bron van waarheid voor zowel de EnergyLedger
+   * (huishouden = verbruik − EV) als het ev-charger-device (Homey Energy). Vervangt de oude
+   * integratie van `charge_power_kw`, die vaak 0 meldde tijdens laden → EV werd nooit geboekt.
+   */
+  _trackEvEnergy(addedDc) {
+    if (typeof addedDc !== 'number' || addedDc < 0) return;
+    if (this._evTotalAcKwh == null) this._evTotalAcKwh = this.homey.settings.get('tesla_ev_energy_ac_kwh') || 0;
+    if (this._evLastAddedDc == null) {
+      const persisted = this.homey.settings.get('tesla_ev_last_added_dc');
+      this._evLastAddedDc = (typeof persisted === 'number') ? persisted : addedDc;   // 1e read = baseline
+    }
+    const prev = this._evLastAddedDc;
+    const deltaDc = addedDc >= prev ? (addedDc - prev) : addedDc;   // dalend = nieuwe sessie (reset naar ~0)
+    this._evLastAddedDc = addedDc;
+    this.homey.settings.set('tesla_ev_last_added_dc', addedDc);
+    if (deltaDc > 0) {
+      const eff = Math.min(1, Math.max(0.5, this.homey.settings.get('ev_charge_efficiency') ?? 0.90));
+      this._evTotalAcKwh += deltaDc / eff;
+      this.homey.settings.set('tesla_ev_energy_ac_kwh', this._evTotalAcKwh);
+    }
   }
 
   /** Maakt de auto wakker (best-effort) zodat een volgend commando aankomt. */
@@ -234,8 +264,12 @@ class TeslaScheduler {
    */
   async _wake() {
     const t0 = Date.now();
+    // Wekken via de SETTABLE capability `car_wake_up` (boolean), NIET via de flow-actie:
+    // flow-acties van een ander app-device vereisen de `homey.flow`-scope, die een app niet
+    // krijgt ("Missing Scopes") — settable capabilities (homey.device.control) wél. Zie de
+    // limiet-discussie: alleen settable caps zijn programmatisch te zetten.
     try {
-      await this.app.runDeviceAction(this._teslaCarId(), 'car_wake_up', { wait: 'wait' });
+      await this.app.setDeviceCapability(this._teslaCarId(), 'car_wake_up', true);
     } catch (e) { this.app.log(`[TeslaSched] wake-commando faalde (${e?.message || e})`); }
     this._bumpCmd();
     let cs = await this._carState();
@@ -459,12 +493,13 @@ class TeslaScheduler {
     let commanded = null, verify = null;
     if (connected && soc != null) {
       const want = chargeNow;
-      const { charging: actual, limit: carLimit, dc, powerKw, noPower } = await this._readActual(st);
+      const { charging: actual, limit: carLimit, dc, powerKw, noPower, chargeAdded } = await this._readActual(st);
       actualCharging = actual;        // de Tesla-boolean is leidend (charging_on/charging_state)
       carLimitRead = carLimit;
       awayDc = dc;
       chargePowerKw = powerKw;
       noPowerOnCable = noPower;
+      this._trackEvEnergy(chargeAdded);   // EV-energie betrouwbaar boeken (één bron voor ledger + device)
       if (!noPower) {
         if (this._noPowerNotified) this.homey.emit('ems:evPowerRestored');  // stroom terug op de kabel
         this._noPowerNotified = false;   // reset zodra er weer stroom op de kabel staat
@@ -490,32 +525,43 @@ class TeslaScheduler {
         }
       }
 
-      // capPct = hoogste SoC die de auto nu mag bereiken (= ons stop-punt):
-      //   verplicht laden → mandatory · opportunistisch venster → ceiling ·
-      //   wachten/op doel → mandatory (zo laadt hij niet boven het doel door).
+      // capPct = het EIND-doel (hoogste SoC die we deze deadline willen): verplicht/wachten → mandatory ·
+      // opportunistisch venster → ceiling. Dit is waar we héén laden in de goedkoopste uren.
       const capPct = Math.max(50, Math.min(100, Math.round(
         (want && tier === 'opportunistisch') ? ceiling : mandatory
       )));
-      // Limiet-DOEL: laden → capPct (laad tot doel). Pauze → richting huidige SoC, nooit
-      // omhoog, ondergrens 50% (Tesla kan niet lager). Zo stopt de auto zichzelf op ~SoC
-      // als de zachte stop niet landt — i.p.v. via een te hoge limiet alsnog naar 55% te laden.
-      const pauseLimit  = Math.max(50, Math.min(carLimit ?? 100, Math.round(soc)));
-      const limitTarget = want ? capPct : pauseLimit;
+      // hold-niveau = de Spaarstand (`ev_vacation_soc`, default 55%): waar de auto zichzelf op houdt
+      // zolang we NOG niet naar het eind-doel laden; nooit boven het eind-doel. De limiet stuurt hier
+      // op: tijdens de hold = holdPct (auto onderhoudt zelf 55%), tijdens de laad-fase = capPct.
+      const holdPct = Math.max(50, Math.min(capPct, Math.round(this.homey.settings.get('ev_vacation_soc') ?? 55)));
+      // Limiet-DOEL = de bovengrens voor NU. Laden we naar het eind-doel (want), of zitten we al boven
+      // het hold-niveau (laad-fase/split-pauze)? → capPct. Anders → holdPct. Zo stáát de auto op 55%
+      // tot het goedkope laad-venster, en springt de limiet dan naar 80%. Een gemiste stop betekent
+      // hooguit doorladen tot de huidige bovengrens, nooit naar de auto-eigen limiet (82%).
+      const limitTarget = (want || soc > holdPct) ? capPct : holdPct;
 
-      // 4a. Laadlimiet = limitTarget = stop-punt. Synchroniseren zodra de Tesla laden meldt
-      //     (actual===true): laden → limiet naar capPct; pauze → limiet naar ~SoC zodat de auto
-      //     zichzelf op het doel stopt. Niet bij niet-laden (zou laden uitlokken). Alleen thuis —
-      //     onderweg de limiet nooit aanpassen.
-      if (live && atHome && carLimit != null && carLimit !== limitTarget && actual === true &&
+      // 4a. Laadlimiet synchroniseren zodra die afwijkt — onafhankelijk van laden/niet-laden, want
+      //     het zetten van een limiet lokt zélf geen laden uit (dat doet charging_on). Alleen thuis;
+      //     onderweg (DC) de limiet nooit aanraken. Via de trigger-brug `ems:setEvChargeLimit` →
+      //     de gebruiker koppelt die aan de Tesla-actie "Stel Laadlimiet SoC in" (een app mag de
+      //     flow-actie niet zelf draaien: "Missing Scopes"). RECONCILE-gate tegen herhaald vuren.
+      if (live && atHome && carLimit != null && carLimit !== limitTarget &&
           (Date.now() - (this._lastLimitTry || 0)) >= RECONCILE_MS) {
-        if (await this._tryAction(this._teslaBatId(), 'charge_limit', { limit: limitTarget })) {
-          this._lastLimit = limitTarget; this._lastLimitTry = Date.now();
-          this._bumpCmd(); verify = `limiet→${limitTarget}%`;
-        }
+        this.homey.emit('ems:setEvChargeLimit', limitTarget);
+        this._lastLimit = limitTarget; this._lastLimitTry = Date.now();
+        this._bumpCmd(); verify = `limiet→${limitTarget}%`;
       }
 
-      // 4b. Start/stop voor timing. Boven de cap heeft starten geen zin.
-      const want2       = want && soc < capPct;
+      // 4b. Start/stop voor timing. Laad als we ónder de bovengrens-voor-nu zitten EN óf de planner
+      //     nu wil laden naar het eind-doel (want), óf we onder het hold-niveau zijn (auto op 55%
+      //     houden). Boven de bovengrens heeft starten geen zin — de auto stopt daar zelf.
+      const want2       = soc < limitTarget && (want || soc < holdPct);
+      // Status-label: zitten we in de hold-fase (limiet = hold-niveau, nog niet naar het eind-doel)?
+      // Dan de generieke 'wait_cheaper' vervangen door een duidelijke hold-status voor widget/log.
+      if (!want && limitTarget === holdPct && holdPct < capPct) {
+        decision = want2 ? 'hold_charge' : 'hold';
+        reason = `hold op ${holdPct}% — auto houdt zichzelf hier; laadt naar ${capPct}% vanaf het goedkoopste venster`;
+      }
       const mismatch    = (actual === null) ? (this._lastSentWant !== want2) : (actual !== want2);
       const wishChanged = this._lastSentWant !== want2;
       const lastFailed  = !!this._lastDriveError;      // vorige sturing mislukte (could_not_wake_buses)
@@ -612,6 +658,8 @@ class TeslaScheduler {
     this._last = {
       decision, reason, charge_now: chargeNow, tier,
       connected, soc, charging_actual: actualCharging, no_power: noPowerOnCable,
+      away_dc: awayDc, charge_power_kw: chargePowerKw,
+      ev_energy_ac_kwh: this._evTotalAcKwh ?? 0,
       target_pct: mandatory, ceiling_pct: ceiling,
       kwh_needed: rec.kwh_needed, ready_by_iso: readyByIso,
       ready_by_local: rec.ready_by_local, ceil_ready_local: rec.ceil_ready_local,
@@ -675,6 +723,7 @@ class TeslaScheduler {
     const actual = act.charging === true;   // de Tesla-boolean is leidend (charging_on/charging_state)
     const atHome = !act.dc;   // DC-snelladen = Supercharger = onderweg → niet sturen
     const chargePowerKw = act.powerKw;
+    this._trackEvEnergy(act.chargeAdded);   // EV-energie betrouwbaar boeken (één bron voor ledger + device)
     if (availW >= minW) { if (!this._surplusSince) this._surplusSince = now; } else { this._surplusSince = 0; }
     const sustainedOk = this._surplusSince && (now - this._surplusSince) >= startMin * 60_000;
 
@@ -775,6 +824,8 @@ class TeslaScheduler {
       decision, reason, charge_now: want, amps: Math.round(amps), tier,
       target_pct: mandatory, ceiling_pct: ceiling, soc, connected,
       charging_actual: connected ? actual : null,
+      away_dc: !atHome, charge_power_kw: chargePowerKw,
+      ev_energy_ac_kwh: this._evTotalAcKwh ?? 0,
       kwh_needed: rec.kwh_needed, ready_by_local: rec.ready_by_local,
       next_charge_local: rec.next_charge_local, current_price_eur: curPrice,
       mode: this._mode(), updated_local: tsLocal,
@@ -1039,16 +1090,16 @@ class TeslaScheduler {
     return (typeof v === 'number' && v > 0 && v < 120) ? v : 60;
   }
 
-  // Stuurt de Tesla RECHTSTREEKS via de device-flow-acties van de Tesla-app
-  // (geen door de gebruiker gekoppelde flow nodig). charge_limit 50–100,
-  // charge_current 0–32A, charging_on {start,stop}.
+  // Stuurt de Tesla. Start/stop = de SETTABLE capability `charging_on` (betrouwbaar, werkt direct).
+  // Laadlimiet + laadstroom kan een app NIET zelf zetten (flow-acties → "Missing Scopes"); die gaan
+  // via trigger-bruggen (`ems:setEvChargeLimit` / `ems:setEvChargeCurrent`) die de gebruiker aan de
+  // Tesla-acties "Stel Laadlimiet SoC in" / "Stel laadstroom in" koppelt.
   async _drive(wantCharge, capPct, ampsOverride) {
     const dev = this._teslaBatId();
     try {
-      // Hoofd-stop: laadlimiet = capPct ("laad tot X%"). De auto stopt hier zelf,
-      // ook slapend ladend — dus geen los stop-commando naar een slapende auto nodig.
+      // Hoofd-stop: laadlimiet = capPct ("laad tot X%"). De auto stopt hier zelf, ook slapend ladend.
       const limit = Math.max(50, Math.min(100, Math.round(capPct)));
-      if (this._lastLimit !== limit) { if (await this._tryAction(dev, 'charge_limit', { limit })) this._lastLimit = limit; }
+      if (this._lastLimit !== limit) { this.homey.emit('ems:setEvChargeLimit', limit); this._lastLimit = limit; }
 
       // Timing: start/stop via de settable capability `charging_on` (betrouwbaar).
       await this.app.setDeviceCapability(dev, 'charging_on', !!wantCharge);
@@ -1057,7 +1108,7 @@ class TeslaScheduler {
       if (wantCharge) {
         const want = ampsOverride != null ? ampsOverride : this._params().maxA;
         const amps = Math.max(1, Math.min(32, Math.round(want)));
-        if (this._lastAmps !== amps) { if (await this._tryAction(dev, 'charge_current', { current: amps })) this._lastAmps = amps; }
+        if (this._lastAmps !== amps) { this.homey.emit('ems:setEvChargeCurrent', amps); this._lastAmps = amps; }
       }
       this._lastDriveError = null;
       return true;
@@ -1066,12 +1117,6 @@ class TeslaScheduler {
       this.app.error('[TeslaSched] sturing-fout:', this._lastDriveError);
       return false;
     }
-  }
-
-  /** Best-effort flow-actie; faalt stil (logt) zonder de hoofdsturing te raken. */
-  async _tryAction(dev, card, args) {
-    try { await this.app.runDeviceAction(dev, card, args); return true; }
-    catch (e) { this.app.log(`[TeslaSched] ${card} niet gezet (${e?.message || e})`); return false; }
   }
 
   _bumpCmd() {

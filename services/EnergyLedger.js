@@ -51,7 +51,9 @@ class EnergyLedger {
       roll_ts: Date.now(),   // wanneer deze dag begon (≈ middernacht bij rollover; mid-dag bij verse start)
       // Middernacht-baseline van de fiscale P1-registers (gevuld bij eerste tick van de dag).
       p1_base_import: null, p1_base_export: null,
-      // Per-tick (voor €-waardering + EV; energie hieronder is secundair/cross-check).
+      // Middernacht-baseline van de cumulatieve EV-AC-teller (scheduler, uit measure_charge_energy_added).
+      ev_base_ac: null,
+      // EV-laadenergie vandaag (AC = netafname), als delta van de monotone teller.
       ev_kwh: 0,
       import_cost_eur: 0, export_value_eur: 0, avoided_import_eur: 0,
       tick_import_kwh: 0, tick_export_kwh: 0, tick_consumption_kwh: 0,
@@ -117,12 +119,18 @@ class EnergyLedger {
       const dtH = dtMs / 3_600_000;
 
       const pvW = state.pvW ?? 0, gridW = state.gridW ?? 0, batW = state.batPowerW ?? 0;
-      const sc = this.app.teslaScheduler?.getStatus?.() || null;
-      const evW = (sc && sc.charging_actual === true && typeof sc.charge_power_kw === 'number')
-        ? Math.max(0, sc.charge_power_kw * 1000) : 0;
       const consW = pvW + gridW + batW;
 
-      d.ev_kwh              += (evW * dtH) / 1000;
+      // EV-laden (AC = netafname): delta van de monotone cumulatieve teller die de scheduler
+      // bijhoudt uit measure_charge_energy_added (DC ÷ efficiëntie). Robuust tegen de stale
+      // measure_charge_power (die vaak 0 meldt tijdens laden) én tegen herstarts/gaps.
+      const sc = this.app.teslaScheduler?.getStatus?.() || null;
+      const evTotalAc = (sc && typeof sc.ev_energy_ac_kwh === 'number') ? sc.ev_energy_ac_kwh : null;
+      if (evTotalAc != null) {
+        if (d.ev_base_ac == null) d.ev_base_ac = evTotalAc;   // middernacht-baseline
+        d.ev_kwh = +Math.max(0, evTotalAc - d.ev_base_ac).toFixed(3);
+      }
+
       d.tick_consumption_kwh += (consW * dtH) / 1000;
       // BRUTO import/export per tick — apart opgeteld, NOOIT gesaldeerd.
       let solarExportKwh = 0;
