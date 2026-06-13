@@ -142,15 +142,17 @@ Tesla-commando's vergen een wakkere auto; een **slapende, ingeplugde Tesla laadt
 door tot z'n eigen limiet**, en losse start/stop-commando's falen dan met
 `could_not_wake_buses`. Daarom:
 
-- **Laadlimiet = hoofdsturing (hold-model, v1.9.1).** De scheduler zet `charge_limit` op het
-  **niveau-voor-nu**: het **hold-niveau** (Spaarstand `ev_vacation_soc`, 55%) zolang we nog niet
-  naar het eind-doel laden — mét laden aan, zodat de auto **zichzelf op 55% houdt** — en het
-  **eind-doel** (bv. 80%) zodra het goedkoopste laad-venster vóór de deadline aanbreekt. Formule:
-  `limitTarget = (want || soc>holdPct) ? capPct : holdPct`. De timing van 55→80 = wanneer we de
-  limiet ophogen; een dure tussenpiek binnen de laad-fase overbruggen we nog met `charging_on`
-  start/stop (limiet blijft op het doel). De auto stopt **zelf** op de limiet, ook slapend ladend
-  → een gemiste stop betekent hooguit doorladen tot de huidige bovengrens, nooit naar de
-  auto-eigen 82%. Decision-labels `hold` / `hold_charge`.
+- **Laadlimiet = hoofdsturing (v1.9.2).** De scheduler zet `charge_limit` op het **doel** (`capPct`):
+  bewaarstand 55% bij een **verre** deadline (>1 week), anders jouw target. De auto stopt **zelf** op
+  de limiet, ook slapend ladend. We **laden ALLEEN in de door de planner gekozen goedkoopste slots**
+  richting het doel: `want2 = reached || (soc < capPct && chargeNow)` met `reached = soc ≥ capPct−1`.
+  Aankoppelen in een duur uur → **STOP** wat de Tesla zelf start, en wachten op een goedkoop slot.
+  Zodra het doel bereikt is = **"rust"**: laden blijft aan op de limiet en de Tesla houdt het zelf bij
+  (slaapt, minimale drain) — geen stop, geen herhaalde start (`carMaintaining`, churn opgelost).
+  Bewaarstand-recharge gebeurt in de goedkoopste uren binnen een rollend **24u-venster**
+  (`ev_hold_horizon_h`); **binnen de week is er géén 55%-tussenstap**. Split binnen de laad-fase nog via
+  `charging_on` start/stop (limiet blijft op het doel). Gemiste stop → hooguit tot het doel, nooit 82%.
+  Decision-label `rust` (op niveau, laden aan).
 - **Reconcile elke cyclus:** vergelijk gewenst vs werkelijk laden en stuur bij tot het
   klopt (niet alleen op een eigen toestand-wissel).
 - **Wake-bewust + credit-veilig:** `car_state` is **gratis** te checken; pas dán wekken

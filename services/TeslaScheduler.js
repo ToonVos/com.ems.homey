@@ -352,9 +352,17 @@ class TeslaScheduler {
     const ov = await this.app.getTeslaOverride();
     const effActive  = ov.active && !ov.far_deadline;
     const vacationSoc = this.homey.settings.get('ev_vacation_soc') ?? 55;   // accu-vriendelijke rust
-    // Verre deadline → vakantie-hold op vacationSoc; anders standaard-doel.
+    // Verre deadline → bewaarstand op vacationSoc; anders standaard-doel.
     const mandatory  = effActive ? ov.target_pct : (ov.far_deadline ? vacationSoc : ov.auto_target_pct);
-    const deadline   = new Date(effActive ? ov.deadline_iso : ov.auto_deadline);
+    // Bewaarstand-venster: bereik de bewaarstand in de goedkoopste uren binnen een ROLLEND
+    // venster (default 24u, `ev_hold_horizon_h`) i.p.v. de verre datum/07:00 — zo staat de auto
+    // niet dagenlang onder de bewaarstand maar wordt 'ie binnen ~24u goedkoop bijgeladen.
+    const holdHorizonMs = (this.homey.settings.get('ev_hold_horizon_h') ?? 24) * 3_600_000;
+    const deadline   = new Date(
+      effActive          ? ov.deadline_iso
+      : ov.far_deadline  ? (Date.now() + holdHorizonMs)
+      :                    ov.auto_deadline
+    );
     // Opportunistisch plafond, hard afgetopt op 85% (bovenkant voor de accu).
     const oppCeiling = Math.min(this.homey.settings.get('ev_opportunistic_soc') ?? 85, 85);
     // Override of vakantie-hold: geen opportunistisch extra (auto staat dan lang
@@ -525,20 +533,13 @@ class TeslaScheduler {
         }
       }
 
-      // capPct = het EIND-doel (hoogste SoC die we deze deadline willen): verplicht/wachten → mandatory ·
-      // opportunistisch venster → ceiling. Dit is waar we héén laden in de goedkoopste uren.
+      // capPct = het doel-SoC voor deze planning: verplicht/wachten → mandatory · opportunistisch
+      // venster → ceiling. In de far-deadline-case is `mandatory` de bewaarstand (55); binnen de week
+      // = jouw target. De auto stopt zichzelf op de limiet, dus de limiet = dit doel.
       const capPct = Math.max(50, Math.min(100, Math.round(
         (want && tier === 'opportunistisch') ? ceiling : mandatory
       )));
-      // hold-niveau = de Spaarstand (`ev_vacation_soc`, default 55%): waar de auto zichzelf op houdt
-      // zolang we NOG niet naar het eind-doel laden; nooit boven het eind-doel. De limiet stuurt hier
-      // op: tijdens de hold = holdPct (auto onderhoudt zelf 55%), tijdens de laad-fase = capPct.
-      const holdPct = Math.max(50, Math.min(capPct, Math.round(this.homey.settings.get('ev_vacation_soc') ?? 55)));
-      // Limiet-DOEL = de bovengrens voor NU. Laden we naar het eind-doel (want), of zitten we al boven
-      // het hold-niveau (laad-fase/split-pauze)? → capPct. Anders → holdPct. Zo stáát de auto op 55%
-      // tot het goedkope laad-venster, en springt de limiet dan naar 80%. Een gemiste stop betekent
-      // hooguit doorladen tot de huidige bovengrens, nooit naar de auto-eigen limiet (82%).
-      const limitTarget = (want || soc > holdPct) ? capPct : holdPct;
+      const limitTarget = capPct;
 
       // 4a. Laadlimiet synchroniseren zodra die afwijkt — onafhankelijk van laden/niet-laden, want
       //     het zetten van een limiet lokt zélf geen laden uit (dat doet charging_on). Alleen thuis;
@@ -552,17 +553,24 @@ class TeslaScheduler {
         this._bumpCmd(); verify = `limiet→${limitTarget}%`;
       }
 
-      // 4b. Start/stop voor timing. Laad als we ónder de bovengrens-voor-nu zitten EN óf de planner
-      //     nu wil laden naar het eind-doel (want), óf we onder het hold-niveau zijn (auto op 55%
-      //     houden). Boven de bovengrens heeft starten geen zin — de auto stopt daar zelf.
-      const want2       = soc < limitTarget && (want || soc < holdPct);
-      // Status-label: zitten we in de hold-fase (limiet = hold-niveau, nog niet naar het eind-doel)?
-      // Dan de generieke 'wait_cheaper' vervangen door een duidelijke hold-status voor widget/log.
-      if (!want && limitTarget === holdPct && holdPct < capPct) {
-        decision = want2 ? 'hold_charge' : 'hold';
-        reason = `hold op ${holdPct}% — auto houdt zichzelf hier; laadt naar ${capPct}% vanaf het goedkoopste venster`;
+      // 4b. Start/stop voor timing. Twee gevallen:
+      //   • ONDER het doel → laad ALLEEN in de gekozen goedkoopste slots (`want`/chargeNow); buiten
+      //     die slots niet (bij inplug in een duur uur dus: STOP wat de Tesla zelf startte, wachten).
+      //   • OP het doel (binnen ~1% = `reached`) → laden AAN laten ("rust"): de auto pauzeert/hervat
+      //     zichzelf op de limiet (slaapt, minimale drain). We sturen dan geen stop, en geen herhaalde
+      //     start (zie `carMaintaining`). Boven het doel heeft starten geen zin.
+      const reached     = soc >= capPct - 1;
+      const want2       = reached || (soc < capPct && want);
+      // Status-label: op niveau en geen actief laad-slot → "rust" (laden aan, auto regelt zelf).
+      if (reached && !want) {
+        decision = 'rust';
+        reason = `op niveau ${soc}% (limiet ${capPct}%) — laden aan, Tesla houdt het zelf bij`;
       }
-      const mismatch    = (actual === null) ? (this._lastSentWant !== want2) : (actual !== want2);
+      // De auto reguleert zichzelf op de limiet (zelf-pauze bij bereiken = `actual:false`): dat is
+      // GEEN mismatch om te corrigeren. Eén keer inschakelen (eerste start), daarna met rust laten.
+      const carMaintaining = want2 && actual === false && reached && this._lastSentWant === true;
+      const mismatch    = carMaintaining ? false
+                        : (actual === null) ? (this._lastSentWant !== want2) : (actual !== want2);
       const wishChanged = this._lastSentWant !== want2;
       const lastFailed  = !!this._lastDriveError;      // vorige sturing mislukte (could_not_wake_buses)
       const streak      = this._mismatchStreak || 0;

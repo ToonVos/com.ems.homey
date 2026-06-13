@@ -12,7 +12,7 @@
       'pv_peak_kw', 'pv_peak_kw_l1', 'pv_peak_kw_l2', 'pv_peak_kw_l3',
       'pv_l1_peak_hour', 'pv_l2_peak_hour', 'pv_l3_peak_hour',
       'bat_capacity_kwh', 'bat_max_charge_w', 'bat_max_discharge_w',
-      'hp_offset_deg', 'ev_capacity_kwh', 'ev_default_soc', 'ev_floor_soc', 'ev_opportunistic_soc', 'ev_vacation_soc', 'surplus_threshold',
+      'hp_offset_deg', 'ev_capacity_kwh', 'ev_default_soc', 'ev_floor_soc', 'ev_opportunistic_soc', 'ev_vacation_soc', 'ev_hold_horizon_h', 'surplus_threshold',
       'ev_max_current_a', 'ev_min_current_a', 'ev_fixed_current_a', 'ev_target_import_w',
       'ev_peak1_start', 'ev_peak1_end', 'ev_peak2_start', 'ev_peak2_end',
       'ev_night_start', 'ev_night_end', 'ev_bat_night_min_soc',
@@ -31,7 +31,7 @@
       'pv_peak_kw', 'pv_peak_kw_l1', 'pv_peak_kw_l2', 'pv_peak_kw_l3',
       'pv_l1_peak_hour', 'pv_l2_peak_hour', 'pv_l3_peak_hour',
       'bat_capacity_kwh', 'bat_max_charge_w', 'bat_max_discharge_w',
-      'hp_offset_deg', 'ev_capacity_kwh', 'ev_default_soc', 'ev_floor_soc', 'ev_opportunistic_soc', 'ev_vacation_soc', 'surplus_threshold',
+      'hp_offset_deg', 'ev_capacity_kwh', 'ev_default_soc', 'ev_floor_soc', 'ev_opportunistic_soc', 'ev_vacation_soc', 'ev_hold_horizon_h', 'surplus_threshold',
       'ev_charge_mode', 'ev_max_current_a', 'ev_min_current_a', 'ev_fixed_current_a', 'ev_target_import_w',
       'ev_peak1_start', 'ev_peak1_end', 'ev_peak2_start', 'ev_peak2_end',
       'ev_night_charge', 'ev_night_start', 'ev_night_end', 'ev_bat_night_min_soc',
@@ -790,7 +790,11 @@
               <input type="number" id="ev_vacation_soc" value="55" min="20" max="80" />
               <p class="hint">Accu-vriendelijk rustniveau (~50–55%) bij een verre deadline / lang stilstaan. Geen opportunistische top-up dan.</p>
             </div>
-            <div class="field"></div>
+            <div class="field">
+              <label>Bewaarstand-venster (uur)</label>
+              <input type="number" id="ev_hold_horizon_h" value="24" min="2" max="72" />
+              <p class="hint">Bij een verre deadline: bereik de bewaarstand in de goedkoopste uren binnen dit rollende venster (default 24u).</p>
+            </div>
           </div>
           <div class="toggle-row" style="margin-top:6px">
             <input type="checkbox" id="ev_battery_health" />
