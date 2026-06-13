@@ -338,6 +338,11 @@ class TeslaScheduler {
     const st = await tesla.getState();
     const connected = st?.connected ?? false;
     const soc       = st?.soc ?? null;
+    // Aankoppel-moment vastleggen (false→true): het bewaarstand-recharge-venster is VAST 24u
+    // ná inplug, geen perpetueel rollend now+24u (anders schuift "goedkoopste is morgen" eindeloos).
+    if (connected && !this._connectedPrev) this._pluggedSince = Date.now();
+    else if (!connected) this._pluggedSince = null;
+    this._connectedPrev = connected;
 
     // Laadsnelheid-observer + lerend tijd/temp-model (fase A): meet %/uur (globaal + per
     // temp-bucket), leer overhead, log sessies. Fase C: de beslissingen GEBRUIKEN nu de
@@ -354,13 +359,14 @@ class TeslaScheduler {
     const vacationSoc = this.homey.settings.get('ev_vacation_soc') ?? 55;   // accu-vriendelijke rust
     // Verre deadline → bewaarstand op vacationSoc; anders standaard-doel.
     const mandatory  = effActive ? ov.target_pct : (ov.far_deadline ? vacationSoc : ov.auto_target_pct);
-    // Bewaarstand-venster: bereik de bewaarstand in de goedkoopste uren binnen een ROLLEND
-    // venster (default 24u, `ev_hold_horizon_h`) i.p.v. de verre datum/07:00 — zo staat de auto
-    // niet dagenlang onder de bewaarstand maar wordt 'ie binnen ~24u goedkoop bijgeladen.
+    // Bewaarstand-venster: bereik de bewaarstand in de goedkoopste uren binnen een VAST venster
+    // van 24u ná het aankoppelen (`ev_hold_horizon_h`, default 24) — niet de verre datum/07:00 en
+    // géén perpetueel rollend now+24u. Zo wordt de auto na een rit binnen 24u goedkoop bijgeladen
+    // tot de bewaarstand en daarna met rust gelaten (Tesla houdt het zelf bij).
     const holdHorizonMs = (this.homey.settings.get('ev_hold_horizon_h') ?? 24) * 3_600_000;
     const deadline   = new Date(
       effActive          ? ov.deadline_iso
-      : ov.far_deadline  ? (Date.now() + holdHorizonMs)
+      : ov.far_deadline  ? ((this._pluggedSince ?? Date.now()) + holdHorizonMs)
       :                    ov.auto_deadline
     );
     // Opportunistisch plafond, hard afgetopt op 85% (bovenkant voor de accu).

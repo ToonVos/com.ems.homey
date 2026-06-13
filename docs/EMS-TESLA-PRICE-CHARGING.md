@@ -149,8 +149,9 @@ door tot z'n eigen limiet**, en losse start/stop-commando's falen dan met
   Aankoppelen in een duur uur → **STOP** wat de Tesla zelf start, en wachten op een goedkoop slot.
   Zodra het doel bereikt is = **"rust"**: laden blijft aan op de limiet en de Tesla houdt het zelf bij
   (slaapt, minimale drain) — geen stop, geen herhaalde start (`carMaintaining`, churn opgelost).
-  Bewaarstand-recharge gebeurt in de goedkoopste uren binnen een rollend **24u-venster**
-  (`ev_hold_horizon_h`); **binnen de week is er géén 55%-tussenstap**. Split binnen de laad-fase nog via
+  Bewaarstand-recharge gebeurt in de goedkoopste uren binnen een **vast 24u-venster ná het
+  aankoppelen** (`ev_hold_horizon_h`, deadline = `pluggedSince+24u`, niet perpetueel rollend);
+  **binnen de week is er géén 55%-tussenstap**. Split binnen de laad-fase nog via
   `charging_on` start/stop (limiet blijft op het doel). Gemiste stop → hooguit tot het doel, nooit 82%.
   Decision-label `rust` (op niveau, laden aan).
 - **Reconcile elke cyclus:** vergelijk gewenst vs werkelijk laden en stuur bij tot het
