@@ -628,6 +628,7 @@ class TeslaScheduler {
     //    voor de timing (laden in goedkope uren), best-effort.
     const live = this._isLive();
     let commanded = null, verify = null;
+    let capPct = null;
     if (connected && soc != null) {
       const want = chargeNow;
       const { charging: actual, limit: carLimit, dc, powerKw, noPower, chargeAdded } = await this._readActual(st);
@@ -668,7 +669,7 @@ class TeslaScheduler {
       //   Fase 0 (SoC < 55, target > 55) : limiet = 55 (aging-vriendelijke parkeer-SoC)
       //   Fase 1 (55 ≤ SoC < 80, target > 80): limiet = 80 (tripvoorbereiding)
       //   Fase 2 (SoC ≥ 80 of target ≤ 80) : limiet = mandatory (einddoel, incl. 80-90 guard)
-      const capPct = Math.max(50, Math.min(100, Math.round(
+      capPct = Math.max(50, Math.min(100, Math.round(
         (want && tier === 'opportunistisch') ? ceiling :
         (soc < vacationSoc && mandatory > vacationSoc) ? vacationSoc :
         (soc < HOLD       && mandatory > HOLD)        ? HOLD :

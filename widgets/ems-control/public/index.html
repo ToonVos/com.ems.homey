@@ -136,8 +136,11 @@
 
   <!-- Header -->
   <div class="head">
-    <svg class="head-logo" width="28" height="28" viewBox="0 0 342 512" fill="currentColor">
-      <path fill-rule="evenodd" d="M0 68.1C63 100 117.7 108.5 171 108.5S279 100 342 68.1C330 19.5 295.3 0 256 0H86C46.7 0 12 19.5 0 68.1zM171 153.6c-49.3 0-98.8-8.8-152-42.1L85.3 512l40.3-192.8c13.7 3.7 29.8 5.7 45.4 5.7s31.7-2 45.4-5.7L256.7 512 342 111.5c-53.2 33.3-121.7 42.1-171 42.1z"/>
+    <svg class="head-logo" width="30" height="30" viewBox="0 0 30 30">
+      <rect width="30" height="30" rx="15" fill="rgba(128,128,128,.15)"/>
+      <path fill-rule="evenodd" fill="currentColor"
+        d="M6.5 10.2 Q6 8.2 15 8.2 Q24 8.2 23.5 10.2 L21.8 11.8 Q19.8 10.2 16.5 10.6 L15 23 L13.5 10.6 Q10.2 10.2 8.2 11.8 Z
+           M13.2 9.4 Q15 12 16.8 9.4 Q15.6 8.2 15 8.2 Q14.4 8.2 13.2 9.4 Z"/>
     </svg>
     <div>
       <div class="head-name">Tesla Model S</div>
@@ -248,7 +251,7 @@
 
     function renderBattery(sc, overrideTarget) {
       const soc    = sc?.soc ?? null;
-      const target = sc?.target_pct ?? overrideTarget ?? 90;
+      const target = overrideTarget ?? sc?.target_pct ?? 90;
       const deadlineLbl = $('batLbl');
 
       // Datum uit ready_by_local of state.deadline_iso
@@ -325,24 +328,47 @@
         ));
       } else if (!sc.connected) {
         // Niet aangekoppeld — toon planning als was de auto er wel
-        if (sc.next_charge_local) {
+        const nextLocal = sc.next_charge_local;
+        const readyLocal = sc.ready_by_local;
+
+        if (nextLocal) {
           rows.push(makeRow(
             'rgba(128,128,128,.3)',
-            shortWhen(sc.next_charge_local),
-            priceStr ? `~${priceStr}` : 'goedkoop uur',
+            shortWhen(nextLocal),
+            priceStr ? `~${priceStr} · goedkoop uur` : 'goedkoop uur',
             '', '',
             `?→<br>${target}%`, 'rgba(128,128,128,.1)', 'color:rgba(128,128,128,.5)',
-            shortDate(sc.next_charge_local)
+            shortDate(nextLocal)
           ));
         }
-        if (sc.ready_by_local) {
+
+        // Klaar-tijd: voorkeur sc.ready_by_local, anders deadline_iso als fallback
+        const readyStr = readyLocal
+          ? `${shortDate(readyLocal)} ${shortWhen(readyLocal)}`
+          : (state?.deadline_iso && state?.tz)
+            ? (() => { try { return new Intl.DateTimeFormat('nl-NL', { timeZone: state.tz, day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }).format(new Date(state.deadline_iso)); } catch(_){return null;} })()
+            : null;
+
+        if (readyStr) {
           rows.push(makeRow(
             'rgba(128,128,128,.3)',
-            shortWhen(sc.ready_by_local),
+            readyStr,
             `klaar op ${target}%`,
             '', '',
             `${target}%`, 'rgba(128,128,128,.1)', 'color:rgba(128,128,128,.5)',
-            shortDate(sc.ready_by_local)
+            ''
+          ));
+        }
+
+        if (!nextLocal && !readyLocal) {
+          // Scheduler nog geen plan — toon placeholderrij
+          rows.push(makeRow(
+            'rgba(128,128,128,.2)',
+            'Plan wordt berekend…',
+            'koppel auto aan om te starten',
+            '', '',
+            `${soc ?? '–'}%`, 'rgba(128,128,128,.08)', 'color:rgba(128,128,128,.4)',
+            ''
           ));
         }
       } else if (sc.charge_now) {
