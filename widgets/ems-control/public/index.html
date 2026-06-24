@@ -6,81 +6,169 @@
     body {
       font-family: var(--homey-font-family, -apple-system, sans-serif);
       background: transparent;
-      color: var(--homey-text-color, #202124);
+      color: var(--homey-text-color, #1A1916);
       display: flex; flex-direction: column;
-      padding: 8px 12px 6px;
+      padding: 10px 14px 10px;
+      gap: 0;
     }
 
-    .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
-    .title  { font-size: 10px; font-weight: 700; opacity: .45; letter-spacing: .8px; text-transform: uppercase; }
-    .mode   { font-size: 9px; padding: 2px 8px; border-radius: 6px; font-weight: 700; white-space: nowrap; }
+    /* ── Header ── */
+    .head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .head-logo { flex-shrink: 0; opacity: .7; }
+    .head-name { font-size: 14px; font-weight: 600; line-height: 1; }
+    .head-sub  { font-size: 11px; opacity: .5; margin-top: 2px; }
+    .mode-badge {
+      margin-left: auto; font-size: 9px; padding: 2px 8px; border-radius: 6px;
+      font-weight: 700; white-space: nowrap;
+    }
     .mode-auto   { background: rgba(128,128,128,.12); color: rgba(128,128,128,.7); }
-    .mode-manual { background: rgba(249,115,22,.13); color: #f97316; }
+    .mode-manual { background: rgba(249,115,22,.13);  color: #f97316; }
 
-    .soc { display: flex; align-items: baseline; gap: 5px; margin-bottom: 6px; }
-    .soc-val  { font-size: 26px; font-weight: 800; letter-spacing: -1px; }
-    .soc-unit { font-size: 10px; opacity: .45; }
-    .soc-arrow{ font-size: 12px; opacity: .4; }
-    .soc-target { font-size: 15px; font-weight: 700; color: #f97316; }
+    /* ── Batterijbalk ── */
+    .bat-section { margin-bottom: 10px; }
+    .bat-lbl { font-size: 11px; font-weight: 600; opacity: .5; margin-bottom: 6px; }
+    .bat-wrap { position: relative; }
+    .bat-track {
+      height: 44px; display: flex; border-radius: 8px; overflow: hidden;
+    }
+    .bat-green { background: #34C489; display: flex; align-items: center; min-width: 0; }
+    .bat-blue  { display: flex; align-items: center; justify-content: flex-end; min-width: 0; }
+    .bat-gray  { flex: 1; }
+    .bat-num-green {
+      font-size: 13px; font-weight: 600; color: #C8F5E2;
+      font-family: monospace; padding-left: 10px; white-space: nowrap;
+    }
+    .bat-num-blue {
+      font-size: 13px; font-weight: 600;
+      font-family: monospace; padding-right: 8px; white-space: nowrap;
+    }
+    .bat-limit {
+      position: absolute; top: 0; bottom: 0;
+      display: flex; align-items: center;
+      border-left: 2px solid #378ADD;
+      pointer-events: none;
+    }
 
-    .label { font-size: 9px; font-weight: 700; opacity: .4; text-transform: uppercase; letter-spacing: .6px; margin: 6px 0 4px; }
+    /* licht */
+    @media (prefers-color-scheme: light) {
+      .bat-blue  { background: #C4DAFA; }
+      .bat-gray  { background: rgba(0,0,0,.08); }
+      .bat-num-blue { color: #185FA5; }
+    }
+    /* donker */
+    @media (prefers-color-scheme: dark) {
+      .bat-blue  { background: #1A3A5C; }
+      .bat-gray  { background: rgba(255,255,255,.07); }
+      .bat-num-blue { color: #85B7EB; }
+    }
 
-    .chips { display: flex; gap: 5px; }
+    /* ── Planning rows ── */
+    .rows { display: flex; flex-direction: column; margin-bottom: 10px; }
+    .prow {
+      display: grid;
+      grid-template-columns: 4px 1fr 52px 56px 36px;
+      align-items: center;
+      gap: 0 8px;
+      padding: 7px 0;
+      border-bottom: 0.5px solid rgba(128,128,128,.1);
+    }
+    .prow:last-child { border-bottom: none; }
+    .pr-accent { width: 4px; height: 28px; border-radius: 2px; }
+    .pr-info   { min-width: 0; }
+    .pr-time   { font-size: 12px; font-weight: 600; font-family: monospace; white-space: nowrap; }
+    .pr-sub    { font-size: 10px; opacity: .5; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pr-cost   { text-align: right; }
+    .pr-cost-num { font-size: 13px; font-weight: 700; }
+    .pr-cost-sub { font-size: 9px; opacity: .45; }
+    .pr-bubble {
+      width: 44px; height: 44px; border-radius: 50%;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      font-size: 9px; font-weight: 700; font-family: monospace; line-height: 1.2;
+      text-align: center;
+    }
+    .pr-date { font-size: 9px; opacity: .45; text-align: right; white-space: nowrap; }
+
+    /* ── Scheidingslijn ── */
+    .divider { height: 0.5px; background: rgba(128,128,128,.15); margin: 6px 0 10px; }
+
+    /* ── Controls ── */
+    .label { font-size: 9px; font-weight: 700; opacity: .4; text-transform: uppercase; letter-spacing: .6px; margin: 0 0 5px; }
+    .chips { display: flex; gap: 5px; margin-bottom: 10px; }
     .chip {
       flex: 1; text-align: center; padding: 7px 0; border-radius: 8px; cursor: pointer;
       font-size: 13px; font-weight: 700; border: 1.5px solid rgba(128,128,128,.2);
-      background: transparent; color: var(--homey-text-color, #202124); transition: all .12s;
+      background: transparent; color: var(--homey-text-color, #1A1916); transition: all .12s;
     }
-    .chip.sel { border-color: #f97316; background: rgba(249,115,22,.14); color: #f97316; }
-    .chip.auto.sel { border-color: #22c55e; background: rgba(34,197,94,.14); color: #22c55e; }
+    .chip.sel       { border-color: #f97316; background: rgba(249,115,22,.14); color: #f97316; }
+    .chip.auto.sel  { border-color: #22c55e; background: rgba(34,197,94,.14);  color: #22c55e; }
 
     input[type=datetime-local] {
-      width: 100%; padding: 7px 9px; border-radius: 8px; font-size: 12px;
+      width: 100%; padding: 7px 9px; border-radius: 8px; font-size: 12px; margin-bottom: 10px;
       border: 1.5px solid rgba(128,128,128,.2); background: transparent;
-      color: var(--homey-text-color, #202124); font-family: inherit;
+      color: var(--homey-text-color, #1A1916); font-family: inherit;
     }
 
-    .actions { display: flex; gap: 6px; margin-top: 10px; }
+    .actions { display: flex; gap: 6px; }
     .btn {
       flex: 1; padding: 9px 0; border-radius: 8px; font-size: 12px; font-weight: 700;
       cursor: pointer; border: none; font-family: inherit;
     }
     .btn-save { background: #f97316; color: #fff; }
-    .btn-auto { background: rgba(128,128,128,.14); color: var(--homey-text-color, #202124); }
+    .btn-auto { background: rgba(128,128,128,.14); color: var(--homey-text-color, #1A1916); }
     .btn:disabled { opacity: .4; cursor: default; }
-
-    .proj { margin: 2px 0 6px; padding: 8px 10px; border-radius: 9px;
-            background: rgba(128,128,128,.08); display: flex; flex-direction: column; gap: 3px; }
-    .pr-row  { font-size: 12px; opacity: .75; line-height: 1.3; }
-    .pr-head { font-size: 13.5px; font-weight: 700; opacity: .95; }
-    .pr-muted{ opacity: .55; }
-    .pr-conn { opacity: .9; font-weight: 600; }
-    .pr-foot { opacity: .45; font-size: 10px; }
-    .proj .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
-    .dot-on  { background: #22c55e; }
-    .dot-off { background: rgba(128,128,128,.4); }
-    .dot-warn{ background: #f59e0b; }
 
     .status { margin-top: 8px; font-size: 12px; opacity: .7; line-height: 1.3; text-align: center; }
     .status.err { color: #ef4444; opacity: .95; }
     .status.ok  { color: #22c55e; opacity: .95; }
+
+    /* ── Hint banner ── */
+    .hint {
+      margin-top: 8px; padding: 7px 10px; border-radius: 8px;
+      background: rgba(186,117,23,.12); color: #BA7517;
+      font-size: 10px; display: flex; align-items: center; gap: 6px;
+    }
+    @media (prefers-color-scheme: dark) {
+      .hint { background: rgba(239,159,39,.12); color: #EF9F27; }
+    }
   </style>
 </head>
 <body>
-  <div class="header">
-    <div class="title">🚗 Tesla laaddoel</div>
-    <span id="mode" class="mode mode-auto">AUTO</span>
+
+  <!-- Header -->
+  <div class="head">
+    <svg class="head-logo" width="28" height="28" viewBox="0 0 342 512" fill="currentColor">
+      <path fill-rule="evenodd" d="M0 68.1C63 100 117.7 108.5 171 108.5S279 100 342 68.1C330 19.5 295.3 0 256 0H86C46.7 0 12 19.5 0 68.1zM171 153.6c-49.3 0-98.8-8.8-152-42.1L85.3 512l40.3-192.8c13.7 3.7 29.8 5.7 45.4 5.7s31.7-2 45.4-5.7L256.7 512 342 111.5c-53.2 33.3-121.7 42.1-171 42.1z"/>
+    </svg>
+    <div>
+      <div class="head-name">Tesla Model S</div>
+      <div class="head-sub" id="connStatus">–</div>
+    </div>
+    <span class="mode-badge mode-auto" id="modeBadge">AUTO</span>
   </div>
 
-  <div class="soc">
-    <span class="soc-val"  id="soc">–</span><span class="soc-unit">% nu</span>
-    <span class="soc-arrow">→</span>
-    <span class="soc-target" id="tgt">–%</span>
-    <span class="soc-final" id="tgt-final" style="display:none;font-size:0.75em;opacity:0.55;margin-left:4px"></span>
+  <!-- Batterijbalk -->
+  <div class="bat-section">
+    <div class="bat-lbl" id="batLbl">doel · –</div>
+    <div class="bat-wrap">
+      <div class="bat-track" id="batTrack">
+        <div class="bat-green" id="batGreen" style="width:0%">
+          <span class="bat-num-green" id="batNumGreen"></span>
+        </div>
+        <div class="bat-blue" id="batBlue" style="width:0%">
+          <span class="bat-num-blue" id="batNumBlue"></span>
+        </div>
+        <div class="bat-gray" id="batGray"></div>
+      </div>
+      <div class="bat-limit" id="batLimit" style="left:90%"></div>
+    </div>
   </div>
 
-  <div class="proj" id="proj"></div>
+  <!-- Planning rows -->
+  <div class="rows" id="planRows"></div>
 
+  <div class="divider"></div>
+
+  <!-- Controls -->
   <div class="label">Doel</div>
   <div class="chips" id="chips">
     <div class="chip auto" data-pct="60">Auto&nbsp;60</div>
@@ -107,7 +195,6 @@
 
     const $ = (id) => document.getElementById(id);
 
-    // ISO (UTC) → "YYYY-MM-DDTHH:MM" in de Homey-tijdzone (voor datetime-local).
     function isoToLocalInput(iso, tz) {
       const d = new Date(iso);
       const p = new Intl.DateTimeFormat('en-CA', {
@@ -117,7 +204,6 @@
       return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
     }
 
-    // Hoeveel de wandklok van tz vóórloopt op UTC, op moment `date` (ms).
     function tzOffsetMs(date, tz) {
       const p = new Intl.DateTimeFormat('en-US', {
         timeZone: tz, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit',
@@ -128,7 +214,6 @@
       return asUTC - date.getTime();
     }
 
-    // "YYYY-MM-DDTHH:MM" (wandklok in tz) → ISO (UTC).
     function localInputToIso(val, tz) {
       const [d, t] = val.split('T');
       const [y, mo, day] = d.split('-').map(Number);
@@ -140,136 +225,217 @@
       return new Date(utcGuess - off).toISOString();
     }
 
-    function renderChips() {
-      document.querySelectorAll('.chip').forEach(c => {
-        c.classList.toggle('sel', Number(c.dataset.pct) === selPct);
-      });
-      $('tgt').textContent = selPct + '%';
-    }
-
-    function applyState(s) {
-      state = s;
-      selPct = s.target_pct;
-      $('soc').textContent  = s.tesla_soc == null ? '–' : s.tesla_soc;
-      $('mode').textContent = s.active ? 'HANDMATIG' : 'AUTO';
-      $('mode').className   = 'mode ' + (s.active ? 'mode-manual' : 'mode-auto');
-      $('deadline').value   = isoToLocalInput(s.deadline_iso, s.tz);
-
-      renderChips();   // stelt tgt in op selPct (einddoel)
-
-      // Overschrijf tgt met de huidige fase-limiet als die verschilt van het einddoel.
-      const sc = s.scheduler;
-      const phaseLim = sc?.phase_limit_pct;
-      const finalGoal = s.target_pct;
-      if (phaseLim && phaseLim !== finalGoal) {
-        $('tgt').textContent = phaseLim + '%';
-        $('tgt-final').textContent = '→ ' + finalGoal + '%';
-        $('tgt-final').style.display = 'inline';
-      } else {
-        $('tgt-final').style.display = 'none';
-      }
-
-      renderProj(s);
-    }
-
-    function hhmm(local) { return local ? String(local).replace(/^.*?(\d{1,2}:\d{2}):\d{2}.*$/, '$1').replace(/:\d\d$/, m => m) : '?'; }
     function shortWhen(local) {
-      // "9-6-2026, 05:00:00" → "05:00" (vandaag) of "za 05:00" — kort
       if (!local) return '?';
       const m = String(local).match(/(\d{1,2}):(\d{2})/);
       return m ? `${m[1].padStart(2,'0')}:${m[2]}` : '?';
     }
 
-    // Verbinding: toont of de auto is aangekoppeld. Bij actief laden voegen we '⚡ laadt'
-    // toe als positieve bevestiging — maar NOOIT 'geen laadstroom' als de auto niet laadt:
-    // niet-laden is meestal het bedoelde gedrag (Spaarstand/wachten) en de reden staat al
-    // in de hoofdstatus. Een 'geen laadstroom'-melding zou ten onrechte een storing suggereren.
-    function connRow(sc) {
-      if (!sc) return '';
-      if (sc.connected === false)
-        return `<div class="pr-row pr-conn"><span class="dot dot-off"></span>🔌 niet aangekoppeld</div>`;
-      if (sc.connected !== true) return '';   // onbekend → niets tonen
-      // NoPower = kabel ingeplugd maar geen stroom op de kabel (laadpunt uit / rode kabel).
-      // Dit is wél een fixbaar probleem → tonen (i.t.t. het normale niet-laden).
-      if (sc.no_power === true)
-        return `<div class="pr-row pr-conn"><span class="dot dot-warn"></span>🔌 aangekoppeld · ⚠️ geen stroom op kabel — laadpunt aan?</div>`;
-      const laadt = sc.charging_actual === true ? ' · ⚡ laadt' : '';
-      return `<div class="pr-row pr-conn"><span class="dot dot-on"></span>🔌 aangekoppeld${laadt}</div>`;
+    function shortDate(local) {
+      if (!local) return '';
+      const m = String(local).match(/(\d{1,2})-(\d{1,2})-(\d{4})/);
+      if (m) {
+        const months = ['jan','feb','mrt','apr','mei','jun','jul','aug','sep','okt','nov','dec'];
+        return `${m[1]} ${months[+m[2]-1]}`;
+      }
+      return '';
     }
 
-    function renderProj(s) {
-      const el = $('proj');
-      const sc = s.scheduler;
-      if (!sc) { el.innerHTML = '<div class="pr-row pr-muted">scheduler nog niet gestart…</div>'; return; }
-      const surplus = s.charge_mode === 'surplus';
+    function renderChips() {
+      document.querySelectorAll('.chip').forEach(c =>
+        c.classList.toggle('sel', Number(c.dataset.pct) === selPct));
+    }
 
-      // Verre deadline → vakantie-hold: toon dit in het status-paneel zelf.
-      if (s.far_deadline) {
-        const d = new Date(s.deadline_iso);
-        const datum = new Intl.DateTimeFormat('nl-NL', { timeZone: s.tz, weekday: 'short', day: 'numeric', month: 'short' }).format(d);
-        const modusF = sc.mode === 'dryrun' ? '🧪 proef' : '🟢 live';
-        el.innerHTML =
-          `<div class="pr-row pr-head"><span class="dot dot-on"></span>🍃 Spaarstand ${s.hold_target ?? 55}%</div>` +
-          connRow(sc) +
-          `<div class="pr-row">doel ${s.target_pct}% gepland voor ${datum}</div>` +
-          `<div class="pr-row pr-muted">start in de goedkoopste uren ~7 dagen ervoor</div>` +
-          `<div class="pr-row pr-foot">${modusF}${sc.updated_local ? ` · ${shortWhen(sc.updated_local)}` : ''}</div>`;
+    function renderBattery(sc, overrideTarget) {
+      const soc    = sc?.soc ?? null;
+      const target = sc?.target_pct ?? overrideTarget ?? 90;
+      const deadlineLbl = $('batLbl');
+
+      // Datum uit ready_by_local of state.deadline_iso
+      let datumStr = '–';
+      if (sc?.ready_by_local) {
+        datumStr = `${shortDate(sc.ready_by_local)} ${shortWhen(sc.ready_by_local)}`;
+      } else if (state?.deadline_iso && state?.tz) {
+        try {
+          const d = new Date(state.deadline_iso);
+          datumStr = new Intl.DateTimeFormat('nl-NL', {
+            timeZone: state.tz, day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+          }).format(d);
+        } catch(_) {}
+      }
+      deadlineLbl.textContent = `doel · ${datumStr}`;
+
+      if (soc == null) {
+        $('batGreen').style.width = '0%';
+        $('batBlue').style.width  = '0%';
+        $('batNumGreen').textContent = '';
+        $('batNumBlue').textContent  = '';
+        $('batLimit').style.left = target + '%';
         return;
       }
 
-      // 1. Hoofdstatus
-      let dot = 'dot-off', icon = '○', head;
-      if (sc.decision === 'panic_charge')           { dot = 'dot-on';   icon = '🪫'; head = 'Noodladen (onder bodem)'; }
-      else if (sc.charge_now)                        { dot = 'dot-on';   icon = '⚡'; head = surplus ? `Laadt op overschot${sc.amps ? ` @ ${sc.amps}A` : ''}` : `Laadt nu${sc.tier ? ` (${sc.tier})` : ''}`; }
-      else if (sc.decision === 'at_target')          { dot = 'dot-on';   icon = '✓';  head = `Op plafond (${sc.ceiling_pct}%)`; }
-      else if (sc.decision === 'idle')               { dot = 'dot-on';   icon = '✓';  head = `Boven doel (${sc.target_pct}%) — niets gepland`; }
-      else if (sc.decision === 'skip_disconnected')  { dot = 'dot-off';  icon = '🔌'; head = 'Auto niet verbonden'; }
-      else if (sc.decision === 'skip_no_soc')        { dot = 'dot-off';  icon = '…';  head = 'SoC onbekend'; }
-      else if (sc.decision === 'inactive' || sc.decision === 'mode_not_price') { dot='dot-off'; icon='○'; head='Scheduler inactief'; }
-      else                                           { dot = 'dot-warn'; icon = '⏳'; head = surplus ? 'Wacht op zon-overschot' : 'Wacht op goedkoper uur'; }
+      const green = Math.min(soc, 100);
+      const blue  = Math.max(0, Math.min(target - soc, 100 - green));
 
-      const rows = [`<div class="pr-row pr-head"><span class="dot ${dot}"></span>${icon} ${head}</div>`];
+      $('batGreen').style.width = green + '%';
+      $('batBlue').style.width  = blue  + '%';
+      $('batNumGreen').textContent = green + '%';
+      $('batNumBlue').textContent  = blue > 3 ? target + '%' : '';
+      $('batLimit').style.left = target + '%';
+    }
 
-      // Verbinding + laadstroom expliciet, behalve als de head dat al zegt
-      // (skip_disconnected toont al "Auto niet verbonden").
-      if (sc.decision !== 'skip_disconnected') {
-        const cr = connRow(sc);
-        if (cr) rows.push(cr);
+    function renderRows(sc, s) {
+      const el = $('planRows');
+      if (!sc) { el.innerHTML = ''; return; }
+
+      const rows = [];
+
+      // Hulp: maak een rij-HTML
+      function makeRow(accentColor, timeStr, subStr, costStr, costSubStr, bubbleHtml, bubbleColor, bubbleTxt, dateStr) {
+        return `<div class="prow">
+          <div class="pr-accent" style="background:${accentColor}"></div>
+          <div class="pr-info">
+            <div class="pr-time">${timeStr}</div>
+            ${subStr ? `<div class="pr-sub">${subStr}</div>` : ''}
+          </div>
+          <div class="pr-cost">
+            ${costStr ? `<div class="pr-cost-num">${costStr}</div>` : ''}
+            ${costSubStr ? `<div class="pr-cost-sub">${costSubStr}</div>` : ''}
+          </div>
+          <div class="pr-bubble" style="background:${bubbleColor};${bubbleTxt}">
+            ${bubbleHtml}
+          </div>
+          <div class="pr-date">${dateStr || ''}</div>
+        </div>`;
       }
 
-      if (sc.connected && surplus) {
-        // Overschot+prijs-modus (post-saldering).
-        const bits = [];
-        if (sc.current_price_eur != null) bits.push(`nu €${sc.current_price_eur.toFixed(3)}/kWh`);
-        if (sc.kwh_needed > 0)            bits.push(`verplicht nog ${sc.kwh_needed.toFixed(1)} kWh`);
-        if (bits.length) rows.push(`<div class="pr-row">${bits.join(' · ')}</div>`);
-        if (!sc.charge_now && sc.next_charge_local)
-          rows.push(`<div class="pr-row">⏱ anders verplicht laden ~${shortWhen(sc.next_charge_local)} (goedkoop uur)</div>`);
-        else if (!sc.charge_now && (sc.soc != null && sc.target_pct != null && sc.soc >= sc.target_pct))
-          rows.push(`<div class="pr-row pr-muted">boven doel → alleen gratis zonne-overschot</div>`);
-      } else if (sc.connected) {
-        // Prijs-modus.
-        const bits = [];
-        if (sc.current_price_eur != null) bits.push(`nu €${sc.current_price_eur.toFixed(3)}/kWh`);
-        if (sc.kwh_needed > 0)            bits.push(`nog ${sc.kwh_needed.toFixed(1)} kWh`);
-        if (bits.length) rows.push(`<div class="pr-row">${bits.join(' · ')}</div>`);
+      const soc    = sc.soc ?? null;
+      const target = sc.target_pct ?? 90;
+      const priceStr = sc.current_price_eur != null ? `€${sc.current_price_eur.toFixed(2)}/kWh` : null;
 
-        if (!sc.charge_now && sc.next_charge_local)
-          rows.push(`<div class="pr-row">⏱ start ~${shortWhen(sc.next_charge_local)} (goedkoop uur)</div>`);
-
-        if (sc.kwh_needed > 0 && sc.decision !== 'panic_charge') {
-          const parts = [];
-          if (sc.ready_by_local)  parts.push(`doel ${sc.target_pct}% ~${shortWhen(sc.ready_by_local)}`);
-          if (sc.ceil_ready_local && sc.ceiling_pct > sc.target_pct) parts.push(`plafond ${sc.ceiling_pct}% ~${shortWhen(sc.ceil_ready_local)}`);
-          if (parts.length) rows.push(`<div class="pr-row pr-muted">klaar: ${parts.join(' · ')}</div>`);
+      if (s?.far_deadline) {
+        // Spaarstand
+        rows.push(makeRow(
+          'rgba(128,128,128,.3)',
+          '🍃 Spaarstand',
+          `doel ${target}% gepland voor vertrek`,
+          '', '',
+          `${sc.soc ?? '–'}%`, 'rgba(128,128,128,.12)', 'color:rgba(128,128,128,.7)',
+          ''
+        ));
+      } else if (!sc.connected) {
+        // Niet aangekoppeld — toon planning als was de auto er wel
+        if (sc.next_charge_local) {
+          rows.push(makeRow(
+            'rgba(128,128,128,.3)',
+            shortWhen(sc.next_charge_local),
+            priceStr ? `~${priceStr}` : 'goedkoop uur',
+            '', '',
+            `?→<br>${target}%`, 'rgba(128,128,128,.1)', 'color:rgba(128,128,128,.5)',
+            shortDate(sc.next_charge_local)
+          ));
+        }
+        if (sc.ready_by_local) {
+          rows.push(makeRow(
+            'rgba(128,128,128,.3)',
+            shortWhen(sc.ready_by_local),
+            `klaar op ${target}%`,
+            '', '',
+            `${target}%`, 'rgba(128,128,128,.1)', 'color:rgba(128,128,128,.5)',
+            shortDate(sc.ready_by_local)
+          ));
+        }
+      } else if (sc.charge_now) {
+        // Laadt nu
+        const fromSoc = soc ?? '?';
+        rows.push(makeRow(
+          '#1D9E75',
+          'Nu · laadt',
+          priceStr ? `${priceStr} · ${sc.kwh_needed > 0 ? 'nog ' + sc.kwh_needed.toFixed(1) + ' kWh' : ''}` : '',
+          priceStr ? `~€${((sc.kwh_needed ?? 0) * sc.current_price_eur).toFixed(0)}` : '',
+          '',
+          `${fromSoc}→<br>${target}%`, 'rgba(29,158,117,.15)', 'color:#1D9E75',
+          'nu'
+        ));
+        if (sc.ready_by_local) {
+          rows.push(makeRow(
+            '#378ADD',
+            shortWhen(sc.ready_by_local),
+            `klaar op ${target}%`,
+            '', '',
+            `${target}%`, 'rgba(55,138,221,.12)', 'color:#378ADD',
+            shortDate(sc.ready_by_local)
+          ));
+        }
+      } else {
+        // Wacht op goedkoop uur
+        rows.push(makeRow(
+          'rgba(128,128,128,.25)',
+          'Wacht',
+          priceStr ? `nu ${priceStr} · te duur` : 'wacht op goedkoop uur',
+          '', '',
+          `${soc ?? '–'}%`, 'rgba(128,128,128,.1)', 'color:rgba(128,128,128,.5)',
+          'nu'
+        ));
+        if (sc.next_charge_local) {
+          rows.push(makeRow(
+            '#378ADD',
+            shortWhen(sc.next_charge_local),
+            priceStr ? `goedkoop uur · ${sc.kwh_needed > 0 ? sc.kwh_needed.toFixed(1) + ' kWh' : ''}` : '',
+            sc.kwh_needed > 0 && sc.current_price_eur != null
+              ? `~€${(sc.kwh_needed * sc.current_price_eur).toFixed(0)}` : '',
+            '',
+            `${soc ?? '?'}→<br>${target}%`, 'rgba(55,138,221,.12)', 'color:#378ADD',
+            shortDate(sc.next_charge_local)
+          ));
+        }
+        if (sc.ready_by_local) {
+          rows.push(makeRow(
+            '#378ADD',
+            shortWhen(sc.ready_by_local),
+            `klaar op ${target}%`,
+            '', '',
+            `${target}%`, 'rgba(55,138,221,.12)', 'color:#378ADD',
+            shortDate(sc.ready_by_local)
+          ));
         }
       }
 
-      // Voet: modus + laatste update
-      const modus = sc.mode === 'dryrun' ? '🧪 proef' : '🟢 live';
-      rows.push(`<div class="pr-row pr-foot">${modus}${sc.updated_local ? ` · ${shortWhen(sc.updated_local)}` : ''}</div>`);
-
       el.innerHTML = rows.join('');
+
+      // Hint banner bij afgekoppeld
+      const hint = document.getElementById('connHint');
+      if (!sc.connected && sc.next_charge_local) {
+        if (!hint) {
+          const h = document.createElement('div');
+          h.id = 'connHint'; h.className = 'hint';
+          h.innerHTML = `ⓘ koppel vóór ${shortWhen(sc.next_charge_local)} aan om dit plan te halen`;
+          el.after(h);
+        } else {
+          hint.innerHTML = `ⓘ koppel vóór ${shortWhen(sc.next_charge_local)} aan om dit plan te halen`;
+        }
+      } else if (hint) {
+        hint.remove();
+      }
+    }
+
+    function applyState(s) {
+      state = s;
+      selPct = s.target_pct;
+      renderChips();
+
+      // Header
+      const sc = s.scheduler;
+      const connected = sc?.connected;
+      $('connStatus').textContent = connected === true ? '● Aangekoppeld'
+                                  : connected === false ? '○ Afgekoppeld' : '○ –';
+      $('modeBadge').textContent = s.active ? 'HANDMATIG' : 'AUTO';
+      $('modeBadge').className   = 'mode-badge ' + (s.active ? 'mode-manual' : 'mode-auto');
+
+      $('deadline').value = isoToLocalInput(s.deadline_iso, s.tz);
+
+      renderBattery(sc, s.target_pct);
+      renderRows(sc, s);
     }
 
     function setStatus(msg, kind) {
@@ -278,10 +444,8 @@
       el.className = 'status' + (kind ? ' ' + kind : '');
     }
 
-    // Runtime-resize op de werkelijke inhoud (Homey.setHeight), zodat er geen
-    // witruimte onder de knoppen blijft. Homey.ready zet alleen de begin-hoogte.
     function fitHeight() {
-      const h = Math.ceil(document.body.scrollHeight) + 2;
+      const h = Math.ceil(document.body.scrollHeight) + 4;
       try {
         if (typeof Homey.setHeight === 'function') Homey.setHeight(h);
         else Homey.ready({ height: h });
@@ -303,13 +467,17 @@
         setStatus('Opgeslagen ✓', 'ok');
       } catch (e) {
         setStatus(e.message || 'Opslaan mislukt', 'err');
-      }
+      } finally { fitHeight(); }
     }
 
     async function auto() {
       setStatus('Terug naar auto…');
-      try { applyState(await Homey.api('POST', '/clearOverride', {})); setStatus('Auto-modus ✓', 'ok'); }
-      catch (e) { setStatus(e.message || 'Mislukt', 'err'); }
+      try {
+        applyState(await Homey.api('POST', '/clearOverride', {}));
+        setStatus('Auto-modus ✓', 'ok');
+      } catch (e) {
+        setStatus(e.message || 'Mislukt', 'err');
+      } finally { fitHeight(); }
     }
 
     function onHomeyReady(_Homey) {
@@ -318,8 +486,8 @@
         c.addEventListener('click', () => { selPct = Number(c.dataset.pct); renderChips(); }));
       $('save').addEventListener('click', save);
       $('auto').addEventListener('click', auto);
-      Homey.ready();                // widget tonen; hoogte volgt via setHeight()
-      load();                       // rendert + fitHeight() → setHeight op de inhoud
+      Homey.ready();
+      load();
       setInterval(load, 60_000);
     }
   </script>
