@@ -118,8 +118,15 @@ class TeslaEvAdapter extends Vehicle {
   // ─── State reading ────────────────────────────────────────────────────────
 
   /**
+   * Laatste bekende staat zonder een nieuw API-verzoek.
+   * Gebruik dit in de EmsManager tick — de Tesla-app pusht capability-changes;
+   * getState() is alleen nodig als we een commando gaan sturen.
+   */
+  getCachedState() { return this._lastState ?? null; }
+
+  /**
    * Returns current EV state from Wall Connector (preferred) or Tesla Homey app.
-   * Call this every EMS tick (60s).
+   * Sla de uitkomst op in _lastState zodat getCachedState() altijd vers is.
    */
   async getState() {
     const [vitals, teslaState, chargerState] = await Promise.all([
@@ -128,22 +135,30 @@ class TeslaEvAdapter extends Vehicle {
       this._getChargerDeviceState(),
     ]);
 
-    // Prefer Wall Connector data for power readings (no rate limit)
+    // bat_charge_cable is de meest betrouwbare verbindingsindicator:
+    // 'IEC' = kabel vergrendeld in de poort → auto staat stil, kabel zit in.
+    // Altijd lezen, niet alleen als fallback — het car-device is onbetrouwbaar
+    // als de auto slaapt (charging_state=null → connected afleiding faalt).
+    const batFallback = await this._getBatFallback();
+
+    // Prioriteit connected: Wall Connector (extern) → bat_charge_cable → charger device
+    // car-device charging_state wordt NIET gebruikt voor connected (onbetrouwbaar bij slaap)
     const connected = vitals?.vehicle_connected
+      ?? batFallback?.connected
       ?? chargerState?.connected
-      ?? teslaState?.connected
       ?? false;
 
     const charging = vitals
       ? [6, 7, 11].includes(vitals.evse_state)
       : chargerState?.charging
         ?? teslaState?.charging
+        ?? batFallback?.charging
         ?? false;
 
     // Power priority: 1) Wall Connector local API  2) Charger Homey device  3) calculated
     let powerW  = 0;
     let currentA = 0;
-    let source  = 'tesla_app';
+    let source  = batFallback ? 'bat_fallback' : 'tesla_app';
 
     if (vitals && charging) {
       source = 'wall_connector';
@@ -163,6 +178,9 @@ class TeslaEvAdapter extends Vehicle {
       currentA = chargerState.currentA ?? 0;
     }
 
+    // SoC: car-device (live) → bat-fallback (gecached, maar betrouwbaar genoeg voor planning)
+    const soc = teslaState?.soc ?? batFallback?.soc ?? null;
+
     const state = {
       connected,
       charging,
@@ -170,11 +188,12 @@ class TeslaEvAdapter extends Vehicle {
       currentA,
       sessionKwh: (vitals?.session_energy_wh ?? chargerState?.sessionKwh ?? 0),
       evseState:  EVSE_STATES[vitals?.evse_state] ?? (chargerState?.evseState ?? 'unknown'),
-      soc:        teslaState?.soc ?? null,
+      soc,
       source,
     };
 
     this._lastVitals = vitals;
+    this._lastState  = state;
     this._detectChargingEvents(state);
     this._detectConnectionEvent(state);
     await this._logStateChanges(state);
@@ -569,6 +588,34 @@ class TeslaEvAdapter extends Vehicle {
       this.app.error('[Tesla] App state error:', err.message);
       return this._vehicleStateCache ?? null; // return stale cache on error
     }
+  }
+
+  /**
+   * Leest battery-device capabilities als fallback wanneer het car-device slaapt
+   * (charging_state=null, soc=null). bat_charge_cable='IEC' is het meest betrouwbare
+   * verbindingssignaal: Tesla vergrendelt de kabel bij inpluggen en blokkeert
+   * wegrijden, dus cable='IEC' → auto staat stil en kabel zit in.
+   * bat_charge_port is ONBETROUWBAAR als verbindingsindicator (blijft 'false' nadat
+   * de poortklep dichtgaat terwijl de kabel er nog in zit).
+   */
+  async _getBatFallback() {
+    try {
+      const d = this.homey.settings.get('decisionlog_devices') || {};
+      const batId = d.teslaBat || 'd2ffa0cf-3b76-4185-9185-aee51364ce27';
+      const dev = await this.app.getDevice(batId);
+      const c = dev?.capabilitiesObj || {};
+      const cable        = c.charging_port_cable?.value ?? null;   // 'IEC' of ''
+      const chargingState = c.charging_state?.value      ?? null;  // Charging/Complete/Disconnected/Stopped
+      const batSoc       = c.measure_soc_level?.value ?? c.measure_battery?.value ?? null;
+
+      // connected = kabel in (meest betrouwbaar) OF charging/complete status
+      const connectedByCable  = cable === 'IEC';
+      const connectedByState  = chargingState && chargingState !== 'Disconnected';
+      const connected = connectedByCable || !!connectedByState;
+
+      const charging = chargingState === 'Charging';
+      return { connected, charging, soc: batSoc, source: 'bat_fallback' };
+    } catch (_) { return null; }
   }
 
   /**

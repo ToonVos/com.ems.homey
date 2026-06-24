@@ -32,7 +32,7 @@ const path = require('path');
 
 const USERDATA_DIR = '/userdata';
 const RING_MAX     = 4000;
-const PERIOD_MS    = 60 * 1000;        // 60s beslis-cyclus
+const PERIOD_MS    = 15 * 60 * 1000;   // 15-min vangnet-cyclus (primaire driver = push-events)
 const SLOT_MIN     = 15;               // PricePredictor-resolutie
 const SLOT_H       = SLOT_MIN / 60;
 const VOLTAGE      = 230;
@@ -64,10 +64,50 @@ class TeslaScheduler {
 
   async init() {
     try { fs.mkdirSync(USERDATA_DIR, { recursive: true }); } catch (_) {}
+    try { this._bootstrapPluggedSince(); } catch (e) { this.app.error('[TeslaSched] bootstrap-fout:', e.message); }
     this._tickSafe();
     this._timer = this.homey.setInterval(() => this._tickSafe(), PERIOD_MS);
-    this.app.log(`[TeslaSched] actief — prijs-gestuurd, ${this._mode()} | cyclus ${PERIOD_MS / 1000}s`);
+    this.app.log(`[TeslaSched] actief — prijs-gestuurd, ${this._mode()} | vangnet ${PERIOD_MS / 60000}min (primair: push-events)`);
     this._subscribeEvents();   // push: reageer direct op laden-start/stop i.p.v. wachten op de tick
+  }
+
+  /**
+   * Herstel _pluggedSince uit de opgeslagen setting of (bij eerste run na deploy) uit de JSONL-log.
+   * Voorkomt dat app-herstarts het 24u-venster opschuiven.
+   */
+  _bootstrapPluggedSince() {
+    const saved = this.homey.settings.get('ev_plugged_since_ms');
+    if (saved) {
+      this._pluggedSince = saved;
+      this.app.log(`[TeslaSched] _pluggedSince hersteld uit setting: ${new Date(saved).toISOString()}`);
+      return;
+    }
+    // Geen saved setting: zoek de vroegste connected=true in de JSONL van gisteren + vandaag.
+    const path = require('path');
+    const now = new Date();
+    for (let daysAgo = 1; daysAgo >= 0; daysAgo--) {
+      const d = new Date(now.getTime() - daysAgo * 86400000);
+      const day = `${d.getUTCFullYear()}${String(d.getUTCMonth()+1).padStart(2,'0')}${String(d.getUTCDate()).padStart(2,'0')}`;
+      const file = path.join(USERDATA_DIR, `teslasched-${day}.jsonl`);
+      try {
+        const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+        for (const line of lines) {
+          try {
+            const rec = JSON.parse(line);
+            if (rec.connected === true && rec.ts) {
+              const ms = new Date(rec.ts).getTime();
+              if (!isNaN(ms)) {
+                this._pluggedSince = ms;
+                this.homey.settings.set('ev_plugged_since_ms', ms);
+                this.app.log(`[TeslaSched] _pluggedSince gebootstrapt uit JSONL ${day}: ${rec.ts}`);
+                return;
+              }
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    this.app.log('[TeslaSched] _pluggedSince: geen eerdere inplugging gevonden in JSONL');
   }
 
   /**
@@ -78,22 +118,35 @@ class TeslaScheduler {
    * De 60s-tick blijft als vangnet als de realtime-verbinding wegvalt.
    */
   async _subscribeEvents() {
-    const caps = ['charging_on', 'charging_state', 'measure_charge_power', 'charging_port', 'charging_port_cable'];
-    try {
-      const dev = await this.app.getDevice(this._teslaBatId());
-      this._capInstances = [];
-      for (const cap of caps) {
-        if (!dev.capabilities?.includes(cap)) continue;
-        const inst = dev.makeCapabilityInstance(cap, (value) => {
-          this.app.log(`[TeslaSched] event ${cap}=${value} → directe tick`);
-          this._tickSafe();
-        });
-        this._capInstances.push(inst);
+    this._capInstances = [];
+    const subscribe = async (deviceId, caps, label) => {
+      if (!deviceId) return;
+      try {
+        const dev = await this.app.getDevice(deviceId);
+        for (const cap of caps) {
+          if (!dev.capabilities?.includes(cap)) continue;
+          const inst = dev.makeCapabilityInstance(cap, (value) => {
+            this.app.log(`[TeslaSched] push ${label}.${cap}=${value} → tick`);
+            this._tickSafe();
+          });
+          this._capInstances.push(inst);
+        }
+      } catch (e) {
+        this.app.error(`[TeslaSched] push-abonnement ${label} mislukt:`, e?.message || e);
       }
-      this.app.log(`[TeslaSched] push-abonnement actief op ${this._capInstances.length} capabilities`);
-    } catch (e) {
-      this.app.error('[TeslaSched] push-abonnement mislukt (val terug op 60s-tick):', e?.message || e);
-    }
+    };
+
+    // TeslaBat: laadstroom, laadstatus, kabelstatus
+    await subscribe(this._teslaBatId(),
+      ['charging_on', 'charging_state', 'measure_charge_power', 'charging_port', 'charging_port_cable'],
+      'bat');
+
+    // TeslaCar: SoC en slaap/waak-transitie — de enige juiste bron van waarheidswisselingen
+    await subscribe(this._teslaCarId(),
+      ['measure_soc_usable', 'measure_soc_level', 'car_state', 'charging_state'],
+      'car');
+
+    this.app.log(`[TeslaSched] push-abonnement: ${this._capInstances.length} capabilities (15-min vangnet)`);
   }
 
   destroy() {
@@ -269,7 +322,9 @@ class TeslaScheduler {
     // krijgt ("Missing Scopes") — settable capabilities (homey.device.control) wél. Zie de
     // limiet-discussie: alleen settable caps zijn programmatisch te zetten.
     try {
-      await this.app.setDeviceCapability(this._teslaCarId(), 'car_wake_up', true);
+      const wakePromise = this.app.setDeviceCapability(this._teslaCarId(), 'car_wake_up', true);
+      const wakeTimeout = new Promise((_, rej) => this.homey.setTimeout(() => rej(new Error('wake-cap timeout 15s')), 15_000));
+      await Promise.race([wakePromise, wakeTimeout]);
     } catch (e) { this.app.log(`[TeslaSched] wake-commando faalde (${e?.message || e})`); }
     this._bumpCmd();
     let cs = await this._carState();
@@ -289,19 +344,35 @@ class TeslaScheduler {
   async _tickSafe() {
     if (this._ticking) return;       // re-entry-guard: _wake() kan een tick ~30s blokkeren
     this._ticking = true;
+    // Veiligheidsklep: als _tick() > 90s hangt (bijv. setDeviceCapability die nooit resolved),
+    // reset _ticking zodat de volgende cyclus wél start i.p.v. eeuwig geblokkeerd te zijn.
+    const hangGuard = this.homey.setTimeout(() => {
+      if (this._ticking) {
+        this.app.error('[TeslaSched] _tick() timeout na 90s — _ticking geforceerd gereset');
+        this._ticking = false;
+      }
+    }, 90_000);
     try { await this._tick(); }
     catch (err) { this.app.error('[TeslaSched] fout:', err.message); }
-    finally { this._ticking = false; }
+    finally {
+      this.homey.clearTimeout(hangGuard);
+      this._ticking = false;
+    }
   }
 
   async _tick() {
+    // Minimale _last zodat widget weet dat de scheduler draait, zelfs als onderstaande code hangt.
+    if (!this._last) this._last = { decision: 'starting', reason: '_tick() gestart', charge_now: false, updated_local: this.app.localTime() };
     const tesla = this.app.ems?.tesla;
     if (!tesla) return;
 
     // Wij beheren de auto in modus 'price' (prijs, dynamisch contract) of
     // 'surplus' (zonne-overschot, export vermijden). Anders niets doen.
-    const chargeMode = this.homey.settings.get('ev_charge_mode') || 'solar_only';
     const contract   = this.homey.settings.get('contract_type') || 'fixed';
+    // Als ev_charge_mode nooit expliciet gezet is maar het contract wel dynamisch is,
+    // gedraag dan als 'price' — voorkomt permanent inactief bij nieuwe installaties.
+    const chargeMode = this.homey.settings.get('ev_charge_mode')
+      || (contract === 'dynamic' ? 'price' : 'solar_only');
 
     if (chargeMode === 'surplus') {
       const st0 = await tesla.getState();
@@ -340,8 +411,30 @@ class TeslaScheduler {
     const soc       = st?.soc ?? null;
     // Aankoppel-moment vastleggen (false→true): het bewaarstand-recharge-venster is VAST 24u
     // ná inplug, geen perpetueel rollend now+24u (anders schuift "goedkoopste is morgen" eindeloos).
-    if (connected && !this._connectedPrev) this._pluggedSince = Date.now();
-    else if (!connected) this._pluggedSince = null;
+    // _pluggedSince wordt persistent opgeslagen zodat het een app-herstart overleeft — anders
+    // denkt de fase-0 na elke deploy dat het aankoppelmoment nú is.
+    if (connected && !this._connectedPrev) {
+      const savedSince = this.homey.settings.get('ev_plugged_since_ms');
+      if (savedSince) {
+        // Setting bestaat → auto was al verbonden bij vorige run (app-herstart, geen nieuwe plug-in).
+        // Behoud het originele aankoppelmoment zodat het 24u-venster niet opschuift.
+        this._pluggedSince = savedSince;
+      } else {
+        // Geen saved timestamp → écht nieuwe inplugging.
+        this._pluggedSince = Date.now();
+        this.homey.settings.set('ev_plugged_since_ms', this._pluggedSince);
+        // Bij herinplugging: als de bestaande override al voorbij de deadline is, wis hem.
+        const dl = this.homey.settings.get('tesla_deadline_iso');
+        if (dl && new Date(dl).getTime() < Date.now()) {
+          this.app.log('[Scheduler] Herinplugging na verstreken deadline — override gewist, nieuw plan');
+          this.homey.settings.unset('tesla_target_pct');
+          this.homey.settings.unset('tesla_deadline_iso');
+        }
+      }
+    } else if (!connected) {
+      this._pluggedSince = null;
+      this.homey.settings.unset('ev_plugged_since_ms');
+    }
     this._connectedPrev = connected;
 
     // Laadsnelheid-observer + lerend tijd/temp-model (fase A): meet %/uur (globaal + per
@@ -439,6 +532,20 @@ class TeslaScheduler {
       //   90–100%: pas op het laatste moment vóór deadline (guard), anders goedkoopst
       const mandSet = new Set();
       const addAll = (st) => { st.set.forEach(t => mandSet.add(t)); };
+
+      // Fase 0: bewaarstand-fase — bereik vacationSoc (55%) binnen 24u ná inplugging
+      // als SoC nog onder 55%. Ongeacht far/near deadline: een auto op 36% moet snel
+      // naar een aging-vriendelijke ruststand, niet wachten op slots over 2+ dagen.
+      const holdHorizonMs0 = (this.homey.settings.get('ev_hold_horizon_h') ?? 24) * 3_600_000;
+      const holdDeadlineMs = this._pluggedSince
+        ? Math.min(this._pluggedSince + holdHorizonMs0, dlMs)
+        : Math.min(now + holdHorizonMs0, dlMs);
+      if (soc < vacationSoc && holdDeadlineMs > now) {
+        const kwhHold0 = (vacationSoc - soc) / 100 * cap / EFFICIENCY;
+        const holdWin0 = within.filter(h => h.t < holdDeadlineMs);
+        if (holdWin0.length > 0) addAll(this._pickCheapest(holdWin0, kwhHold0, slotKwh, mandSet));
+      }
+
       // 0–80%-band: aaneengesloten-bewust (fase B) — doorladen waar het loont, splitsen
       // alleen als de prijsbesparing > C_session. Banden 80-90/90-100 blijven deadline-gestuurd.
       const sessionEur = this.homey.settings.get('ev_session_cost_eur') ?? 0.10;
@@ -500,6 +607,22 @@ class TeslaScheduler {
       }
     }
 
+    // Pre-record _last vóór het commando-blok: zodat de widget altijd een status ziet,
+    // ook als _readActual() of _drive() hangt (de ring-push wacht op het volledige record).
+    // Nota: capPct is pas bekend ná de soc-check → weggelaten hier, staat in de volledige rec.
+    this._last = {
+      decision, reason, charge_now: chargeNow, tier,
+      connected, soc, charging_actual: null, no_power: false, away_dc: false,
+      charge_power_kw: null, ev_energy_ac_kwh: this._evTotalAcKwh ?? 0,
+      target_pct: mandatory, ceiling_pct: ceiling,
+      kwh_needed: +kwhNeeded.toFixed(2),
+      ready_by_iso: readyByIso, ready_by_local: readyByIso ? this.app.localTime(new Date(readyByIso)) : null,
+      ceil_ready_local: ceilReadyIso ? this.app.localTime(new Date(ceilReadyIso)) : null,
+      next_charge_local: nextChargeIso ? this.app.localTime(new Date(nextChargeIso)) : null,
+      mode: this._isLive() ? 'live' : 'dryrun', current_price_eur: currentPrice,
+      updated_local: this.app.localTime(),
+    };
+
     // 4. Sturing — PRIMAIR via de laadlimiet ("laad tot X%"): de auto stopt dan
     //    zelf op ons doel, ook terwijl hij (slapend) doorlaadt. Start/stop alleen
     //    voor de timing (laden in goedkope uren), best-effort.
@@ -539,11 +662,17 @@ class TeslaScheduler {
         }
       }
 
-      // capPct = het doel-SoC voor deze planning: verplicht/wachten → mandatory · opportunistisch
-      // venster → ceiling. In de far-deadline-case is `mandatory` de bewaarstand (55); binnen de week
-      // = jouw target. De auto stopt zichzelf op de limiet, dus de limiet = dit doel.
+      // capPct = het doel-SoC voor de HUIDIGE FASE — de auto stopt zichzelf op de limiet.
+      // Gefaseerde limiet: bewaarstand (55%) → 80% → einddoel, zodat de Tesla bij elke
+      // fasegrens vanzelf stopt en we nooit onnodig hoog ingesteld staan.
+      //   Fase 0 (SoC < 55, target > 55) : limiet = 55 (aging-vriendelijke parkeer-SoC)
+      //   Fase 1 (55 ≤ SoC < 80, target > 80): limiet = 80 (tripvoorbereiding)
+      //   Fase 2 (SoC ≥ 80 of target ≤ 80) : limiet = mandatory (einddoel, incl. 80-90 guard)
       const capPct = Math.max(50, Math.min(100, Math.round(
-        (want && tier === 'opportunistisch') ? ceiling : mandatory
+        (want && tier === 'opportunistisch') ? ceiling :
+        (soc < vacationSoc && mandatory > vacationSoc) ? vacationSoc :
+        (soc < HOLD       && mandatory > HOLD)        ? HOLD :
+        mandatory
       )));
       const limitTarget = capPct;
 
@@ -650,7 +779,7 @@ class TeslaScheduler {
       ts: new Date().toISOString(),
       ts_local: this.app.localTime(),
       mode: live ? 'live' : 'dryrun',
-      connected, soc, target_pct: mandatory, ceiling_pct: ceiling, tier,
+      connected, soc, target_pct: mandatory, ceiling_pct: ceiling, phase_limit_pct: capPct, tier,
       charging_actual: actualCharging, car_limit: carLimitRead, away_dc: awayDc,
       charge_power_kw: chargePowerKw, car_state: carStateRead, wake_secs: wakeSecs,
       no_power: noPowerOnCable,
@@ -1116,7 +1245,9 @@ class TeslaScheduler {
       if (this._lastLimit !== limit) { this.homey.emit('ems:setEvChargeLimit', limit); this._lastLimit = limit; }
 
       // Timing: start/stop via de settable capability `charging_on` (betrouwbaar).
-      await this.app.setDeviceCapability(dev, 'charging_on', !!wantCharge);
+      const drivePromise = this.app.setDeviceCapability(dev, 'charging_on', !!wantCharge);
+      const driveTimeout = new Promise((_, rej) => this.homey.setTimeout(() => rej(new Error('drive-cap timeout 15s')), 15_000));
+      await Promise.race([drivePromise, driveTimeout]);
 
       // Amps zetten bij laden (vol vermogen, of opgegeven surplus-amps).
       if (wantCharge) {

@@ -235,7 +235,7 @@ class EmsManager {
       pvSource.getPowerFull(),
       gridSource.getPowerFull(),
       this.battery.getState(),
-      this.tesla ? this.tesla.getState().catch(() => null) : Promise.resolve(null),
+      Promise.resolve(this.tesla ? this.tesla.getCachedState() : null),
     ]);
 
     // B1: EMS sign convention — see services/SignConvention.js

@@ -41,7 +41,10 @@ class EmsApp extends Homey.App {
     if (!this._homeyApi) {
       this._homeyApi = await HomeyAPIV3Local.createAppAPI({ homey: this.homey });
     }
-    return this._homeyApi.devices.getDevice({ id });
+    const devPromise = this._homeyApi.devices.getDevice({ id });
+    // eslint-disable-next-line no-undef
+    const devTimeout = new Promise((_, rej) => setTimeout(() => rej(new Error(`getDevice timeout 10s (${id})`)), 10_000));
+    return Promise.race([devPromise, devTimeout]);
   }
 
   // Zet een settable capability op een device van een andere app (bv. Tesla S
@@ -307,6 +310,11 @@ class EmsApp extends Homey.App {
       case 'getTeslaScheduler': {
         const limit = args?.limit ?? 200;
         return this.teslaScheduler ? this.teslaScheduler.getRecent(limit) : [];
+      }
+
+      // Debug: laatste scheduler-beslissing (ook als ring leeg is = inactive-modus)
+      case 'getTeslaStatus': {
+        return this.teslaScheduler ? this.teslaScheduler.getStatus() : null;
       }
 
       // Debug-/tuning-laag — week-rapport (tuning-metrics uit de scheduler-log)

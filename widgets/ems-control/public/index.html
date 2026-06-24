@@ -76,6 +76,7 @@
     <span class="soc-val"  id="soc">–</span><span class="soc-unit">% nu</span>
     <span class="soc-arrow">→</span>
     <span class="soc-target" id="tgt">–%</span>
+    <span class="soc-final" id="tgt-final" style="display:none;font-size:0.75em;opacity:0.55;margin-left:4px"></span>
   </div>
 
   <div class="proj" id="proj"></div>
@@ -153,7 +154,21 @@
       $('mode').textContent = s.active ? 'HANDMATIG' : 'AUTO';
       $('mode').className   = 'mode ' + (s.active ? 'mode-manual' : 'mode-auto');
       $('deadline').value   = isoToLocalInput(s.deadline_iso, s.tz);
-      renderChips();
+
+      renderChips();   // stelt tgt in op selPct (einddoel)
+
+      // Overschrijf tgt met de huidige fase-limiet als die verschilt van het einddoel.
+      const sc = s.scheduler;
+      const phaseLim = sc?.phase_limit_pct;
+      const finalGoal = s.target_pct;
+      if (phaseLim && phaseLim !== finalGoal) {
+        $('tgt').textContent = phaseLim + '%';
+        $('tgt-final').textContent = '→ ' + finalGoal + '%';
+        $('tgt-final').style.display = 'inline';
+      } else {
+        $('tgt-final').style.display = 'none';
+      }
+
       renderProj(s);
     }
 

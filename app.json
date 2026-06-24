@@ -1026,6 +1026,18 @@
     "getEnergyLedger": {
       "method": "GET",
       "path": "/getEnergyLedger"
+    },
+    "getTeslaStatus": {
+      "method": "GET",
+      "path": "/getTeslaStatus"
+    },
+    "setSchedulerMode": {
+      "method": "POST",
+      "path": "/setSchedulerMode"
+    },
+    "wakeNow": {
+      "method": "GET",
+      "path": "/wakeNow"
     }
   }
 }

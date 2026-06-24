@@ -67,9 +67,16 @@ module.exports = {
 
   async planTrip({ homey, body }) {
     const { departureTime, targetSoc } = body;
-    await homey.app.ems.tripPlanner.setTrip(departureTime, targetSoc);
-    await homey.app.ems.planningEngine.recalculate('trip_update');
-    return { ok: true };
+    // Gebruik setTeslaOverride zodat de trip ook persistent is in homey.settings
+    // (de TeslaScheduler leest tesla_target_pct / tesla_deadline_iso, niet de TripPlanner).
+    try {
+      return await homey.app.setTeslaOverride({ target_pct: targetSoc, deadline_iso: departureTime });
+    } catch (e) {
+      // Fallback naar het oude pad (TripPlanner) bij fouten
+      await homey.app.ems.tripPlanner.setTrip(departureTime, targetSoc);
+      await homey.app.ems.planningEngine.recalculate('trip_update');
+      return { ok: true };
+    }
   },
 
   async recalculate({ homey }) {
@@ -148,6 +155,34 @@ module.exports = {
 
   async getTeslaScheduler({ homey }) {
     return homey.app.teslaScheduler ? homey.app.teslaScheduler.getRecent(300) : [];
+  },
+
+  async getTeslaStatus({ homey }) {
+    return homey.app.teslaScheduler ? homey.app.teslaScheduler.getStatus() : null;
+  },
+
+  async wakeNow({ homey }) {
+    try {
+      const sched = homey.app.teslaScheduler;
+      if (!sched) return { ok: false, error: 'teslaScheduler niet gevonden' };
+      const carId = sched._teslaCarId();
+      if (!carId) return { ok: false, error: 'carId onbekend — Tesla niet gekoppeld' };
+      const wakePromise = homey.app.setDeviceCapability(carId, 'car_wake_up', true);
+      const timeout = new Promise((_, rej) => homey.setTimeout(() => rej(new Error('timeout 15s')), 15_000));
+      await Promise.race([wakePromise, timeout]);
+      return { ok: true, msg: 'wake-up commando gestuurd' };
+    } catch (e) { return { ok: false, error: e.message }; }
+  },
+
+  async setSchedulerMode({ homey, body }) {
+    const { ev_charge_mode, contract_type } = body;
+    if (ev_charge_mode) homey.settings.set('ev_charge_mode', ev_charge_mode);
+    if (contract_type)  homey.settings.set('contract_type',  contract_type);
+    return {
+      ok: true,
+      ev_charge_mode: homey.settings.get('ev_charge_mode'),
+      contract_type:  homey.settings.get('contract_type'),
+    };
   },
 
   // Diagnose: lijst /userdata-logbestanden, of tail een specifiek bestand.
