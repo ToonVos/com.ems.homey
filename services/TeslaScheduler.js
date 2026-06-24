@@ -517,7 +517,7 @@ class TeslaScheduler {
       // Batterijgezondheid: hoge SoC niet lang vasthouden op de NCA-pack.
       const guard = this.homey.settings.get('ev_battery_health') ?? true;
       const HOLD = 80, MID = 90, MIDWIN_MS = 6 * 3_600_000;   // 6u vóór deadline
-      const within  = horizon.filter(h => h.t >= now - SLOT_MIN * 60_000 && h.t <= dlMs);
+      const within  = horizon.filter(h => h.t >= now - SLOT_MIN * 60_000 && h.t < dlMs);
       const fullWin = horizon.filter(h => h.t >= now - SLOT_MIN * 60_000);
 
       // kWh per SoC-band tot het (verplichte) doel
@@ -704,8 +704,11 @@ class TeslaScheduler {
       // De auto reguleert zichzelf op de limiet (zelf-pauze bij bereiken = `actual:false`): dat is
       // GEEN mismatch om te corrigeren. Eén keer inschakelen (eerste start), daarna met rust laten.
       const carMaintaining = want2 && actual === false && reached && this._lastSentWant === true;
+      // actual===null = bat-device offline (auto slaapt). Bij want2=true: altijd mismatch —
+      // we weten niet of de auto laadt en moeten het commando opnieuw sturen (met wake).
+      // Bij want2=false: vertrouw _lastSentWant (stop-commando hoeft niet herhaald bij onbekende staat).
       const mismatch    = carMaintaining ? false
-                        : (actual === null) ? (this._lastSentWant !== want2) : (actual !== want2);
+                        : (actual === null) ? (want2 || this._lastSentWant !== want2) : (actual !== want2);
       const wishChanged = this._lastSentWant !== want2;
       const lastFailed  = !!this._lastDriveError;      // vorige sturing mislukte (could_not_wake_buses)
       const streak      = this._mismatchStreak || 0;
@@ -887,7 +890,7 @@ class TeslaScheduler {
       cap = mandatory;
       kwhNeeded = Math.max(0, (mandatory - soc) / 100 * capKwh) / EFFICIENCY;
       const slotKwh = (maxW / 1000) * SLOT_H;
-      const within  = horizon.filter(h => h.t >= now - SLOT_MIN * 60_000 && h.t <= dlMs);
+      const within  = horizon.filter(h => h.t >= now - SLOT_MIN * 60_000 && h.t < dlMs);
       const sel = this._pickCheapest(within, kwhNeeded, slotKwh, new Set());
       if (sel.lastTs) readyByIso = new Date(sel.lastTs + SLOT_MIN * 60_000).toISOString();
       const fut = [...sel.set].filter(t => t >= now - SLOT_MIN * 60_000);
