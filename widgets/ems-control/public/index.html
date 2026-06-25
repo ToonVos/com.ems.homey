@@ -423,20 +423,30 @@
     }
 
     let _retryTimer = null;
+    let _retryCount = 0;
     async function load() {
       if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
       let data;
-      // Stap 1: data ophalen. Alleen een ECHTE API-fout (app herstart/offline) toont
-      // "Herstarten…" + retry. Een render-fout hierna mag het scherm nooit leegmaken.
+      // Stap 1: data ophalen. Een ECHTE API-fout (app herstart/offline) → snelle retry.
+      // Een render-fout hierna (stap 2) mag het scherm nooit leegmaken (safe() per sectie).
       try {
-        data = await Homey.api('GET', '/getOverride', {});
+        data = await Homey.api('GET', '/getOverride');
       } catch (e) {
-        setStatus('Herstarten…', 'warn');
-        _retryTimer = setTimeout(load, 5000);
+        _retryCount++;
+        // Eerste paar pogingen: kort "Herstarten…" (app komt net op). Blijft het falen,
+        // toon de echte fout zodat het diagnosticeerbaar is i.p.v. eeuwig "Herstarten".
+        if (_retryCount <= 3) {
+          setStatus('Verbinden…', 'warn');
+          _retryTimer = setTimeout(load, 1500);
+        } else {
+          setStatus('Geen verbinding met de app: ' + (e?.message || e?.code || String(e)), 'err');
+          _retryTimer = setTimeout(load, 5000);
+        }
         fitHeight();
         return;
       }
       // Stap 2: renderen (zelf fout-tolerant via safe()).
+      _retryCount = 0;
       applyState(data);
       setStatus('');
       fitHeight();

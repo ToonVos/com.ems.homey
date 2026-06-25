@@ -313,6 +313,7 @@ class EmsApp extends Homey.App {
         return this.ems.getPublicState();
       }
 
+
       // Fork-module 7 — beslis-log ophalen (voor inspectie / NAS-export)
       case 'getDecisionLog': {
         const limit = args?.limit ?? 200;

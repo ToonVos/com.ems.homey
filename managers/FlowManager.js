@@ -10,6 +10,20 @@ class FlowManager {
     this.app.log('[Flow] Flow cards registered');
   }
 
+  // Vuurt een trigger-card en logt een eventuele fout. Stille rejecties (card-id of
+  // token-mismatch) waren onzichtbaar omdat .trigger() nergens ge-await/ge-catch werd.
+  _fire(id, tokens) {
+    let card;
+    try {
+      card = this.homey.flow.getTriggerCard(id);
+    } catch (e) {
+      this.app.error(`[Flow] getTriggerCard('${id}') faalde:`, e?.message || e);
+      return Promise.resolve();
+    }
+    return Promise.resolve(card.trigger(tokens))
+      .catch((e) => this.app.error(`[Flow] trigger('${id}').trigger() faalde:`, e?.message || e));
+  }
+
   _registerTriggers() {
     const trigger = (id) => this.homey.flow.getTriggerCard(id);
 
@@ -46,20 +60,20 @@ class FlowManager {
 
     // EV charge control — user wires these trigger cards to Tesla flow actions
     // "When EMS wants to set EV charge current [current A] → Tesla: Stel laadstroom in op [current]"
-    this.homey.on('ems:setEvChargeCurrent',   amps    => trigger('ev_set_charge_current').trigger({ current: amps }));
+    this.homey.on('ems:setEvChargeCurrent',   amps    => this._fire('ev_set_charge_current', { current: amps }));
     // Laadlimiet (doel-SoC): de app kan de Tesla-limiet niet zelf zetten (flow-acties van een
     // ander device vereisen de homey.flow-scope → "Missing Scopes"). Daarom via een trigger die
     // de gebruiker koppelt aan de Tesla-actie "Stel Laadlimiet SoC in". De auto stopt dan zelf op
     // dit % — ook slapend — zodat we tijdens een lange hold (bv. Spaarstand 55%) geen stops sturen.
-    this.homey.on('ems:setEvChargeLimit',     limit   => trigger('ev_set_charge_limit').trigger({ limit }));
+    this.homey.on('ems:setEvChargeLimit',     limit   => this._fire('ev_set_charge_limit', { limit }));
     // Two separate triggers for start and stop — simpler than a boolean token
     // "When EMS wants to start EV charging → Tesla: Start het opladen"
     // "When EMS wants to stop EV charging  → Tesla: Stop het opladen"
     this.homey.on('ems:setEvChargingOn', enabled => {
-      if (enabled) trigger('ev_start_charging').trigger();
-      else         trigger('ev_stop_charging').trigger();
+      if (enabled) this._fire('ev_start_charging');
+      else         this._fire('ev_stop_charging');
       // Also keep the old combined trigger for backwards compat
-      trigger('ev_set_charging_on').trigger({ enabled });
+      this._fire('ev_set_charging_on', { enabled });
     });
   }
 
