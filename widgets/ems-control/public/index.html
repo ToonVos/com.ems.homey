@@ -63,7 +63,11 @@
     }
 
     /* ── Planning rows ── */
-    .rows { display: flex; flex-direction: column; margin-bottom: 10px; }
+    .rows {
+      display: flex; flex-direction: column; margin-bottom: 10px;
+      max-height: 164px; /* 2 rijen × ~82px */
+      overflow-y: auto;
+    }
     .prow {
       display: grid;
       grid-template-columns: 4px 1fr 52px 56px 36px;
@@ -199,12 +203,14 @@
     const $ = (id) => document.getElementById(id);
 
     function isoToLocalInput(iso, tz) {
-      const d = new Date(iso);
-      const p = new Intl.DateTimeFormat('en-CA', {
-        timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-      }).formatToParts(d).reduce((o, x) => (o[x.type] = x.value, o), {});
-      return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
+      try {
+        const d = new Date(iso);
+        if (isNaN(d)) return '';
+        const opts = { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' };
+        if (tz) opts.timeZone = tz;
+        const p = new Intl.DateTimeFormat('en-CA', opts).formatToParts(d).reduce((o, x) => (o[x.type] = x.value, o), {});
+        return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
+      } catch (_) { return ''; }
     }
 
     function tzOffsetMs(date, tz) {
@@ -292,138 +298,68 @@
       if (!sc) { el.innerHTML = ''; return; }
 
       const rows = [];
+      const soc    = sc.soc ?? null;
+      const target = sc.target_pct ?? 90;
+      const windows = sc.plan_windows || [];
 
-      // Hulp: maak een rij-HTML
-      function makeRow(accentColor, timeStr, subStr, costStr, costSubStr, bubbleHtml, bubbleColor, bubbleTxt, dateStr) {
+      function makeRow(accent, timeStr, subStr, costStr, bubbleHtml, bubbleBg, bubbleColor, dateStr) {
         return `<div class="prow">
-          <div class="pr-accent" style="background:${accentColor}"></div>
+          <div class="pr-accent" style="background:${accent}"></div>
           <div class="pr-info">
             <div class="pr-time">${timeStr}</div>
             ${subStr ? `<div class="pr-sub">${subStr}</div>` : ''}
           </div>
           <div class="pr-cost">
-            ${costStr ? `<div class="pr-cost-num">${costStr}</div>` : ''}
-            ${costSubStr ? `<div class="pr-cost-sub">${costSubStr}</div>` : ''}
+            ${costStr ? `<div class="pr-cost-num" style="color:${accent}">${costStr}</div>` : ''}
           </div>
-          <div class="pr-bubble" style="background:${bubbleColor};${bubbleTxt}">
+          <div class="pr-bubble" style="background:${bubbleBg};color:${bubbleColor}">
             ${bubbleHtml}
           </div>
           <div class="pr-date">${dateStr || ''}</div>
         </div>`;
       }
 
-      const soc    = sc.soc ?? null;
-      const target = sc.target_pct ?? 90;
-      const priceStr = sc.current_price_eur != null ? `€${sc.current_price_eur.toFixed(2)}/kWh` : null;
-
       if (s?.far_deadline) {
-        // Spaarstand
-        rows.push(makeRow(
-          'rgba(128,128,128,.3)',
-          '🍃 Spaarstand',
-          `doel ${target}% gepland voor vertrek`,
-          '', '',
-          `${sc.soc ?? '–'}%`, 'rgba(128,128,128,.12)', 'color:rgba(128,128,128,.7)',
-          ''
-        ));
-      } else if (!sc.connected) {
-        // Niet aangekoppeld — toon planning als was de auto er wel
-        const nextLocal = sc.next_charge_local;
-        const readyLocal = sc.ready_by_local;
-
-        if (nextLocal) {
-          rows.push(makeRow(
-            'rgba(128,128,128,.3)',
-            shortWhen(nextLocal),
-            priceStr ? `~${priceStr} · goedkoop uur` : 'goedkoop uur',
-            '', '',
-            `?→<br>${target}%`, 'rgba(128,128,128,.1)', 'color:rgba(128,128,128,.5)',
-            shortDate(nextLocal)
-          ));
-        }
-
-        // Klaar-tijd: voorkeur sc.ready_by_local, anders deadline_iso als fallback
-        const readyStr = readyLocal
-          ? `${shortDate(readyLocal)} ${shortWhen(readyLocal)}`
-          : (state?.deadline_iso && state?.tz)
-            ? (() => { try { return new Intl.DateTimeFormat('nl-NL', { timeZone: state.tz, day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }).format(new Date(state.deadline_iso)); } catch(_){return null;} })()
-            : null;
-
-        if (readyStr) {
-          rows.push(makeRow(
-            'rgba(128,128,128,.3)',
-            readyStr,
-            `klaar op ${target}%`,
-            '', '',
-            `${target}%`, 'rgba(128,128,128,.1)', 'color:rgba(128,128,128,.5)',
-            ''
-          ));
-        }
-
-        if (!nextLocal && !readyLocal) {
-          // Scheduler nog geen plan — toon placeholderrij
-          rows.push(makeRow(
-            'rgba(128,128,128,.2)',
-            'Plan wordt berekend…',
-            'koppel auto aan om te starten',
-            '', '',
-            `${soc ?? '–'}%`, 'rgba(128,128,128,.08)', 'color:rgba(128,128,128,.4)',
-            ''
-          ));
-        }
-      } else if (sc.charge_now) {
-        // Laadt nu
-        const fromSoc = soc ?? '?';
-        rows.push(makeRow(
-          '#1D9E75',
-          'Nu · laadt',
-          priceStr ? `${priceStr} · ${sc.kwh_needed > 0 ? 'nog ' + sc.kwh_needed.toFixed(1) + ' kWh' : ''}` : '',
-          priceStr ? `~€${((sc.kwh_needed ?? 0) * sc.current_price_eur).toFixed(0)}` : '',
-          '',
-          `${fromSoc}→<br>${target}%`, 'rgba(29,158,117,.15)', 'color:#1D9E75',
-          'nu'
-        ));
-        if (sc.ready_by_local) {
-          rows.push(makeRow(
-            '#378ADD',
-            shortWhen(sc.ready_by_local),
-            `klaar op ${target}%`,
-            '', '',
-            `${target}%`, 'rgba(55,138,221,.12)', 'color:#378ADD',
-            shortDate(sc.ready_by_local)
-          ));
-        }
+        rows.push(makeRow('rgba(128,128,128,.3)', '🍃 Spaarstand', `doel ${target}% gepland voor vertrek`, '', `${soc ?? '–'}%`, 'rgba(128,128,128,.12)', 'rgba(128,128,128,.6)', ''));
       } else {
-        // Wacht op goedkoop uur
-        rows.push(makeRow(
-          'rgba(128,128,128,.25)',
-          'Wacht',
-          priceStr ? `nu ${priceStr} · te duur` : 'wacht op goedkoop uur',
-          '', '',
-          `${soc ?? '–'}%`, 'rgba(128,128,128,.1)', 'color:rgba(128,128,128,.5)',
-          'nu'
-        ));
-        if (sc.next_charge_local) {
-          rows.push(makeRow(
-            '#378ADD',
-            shortWhen(sc.next_charge_local),
-            priceStr ? `goedkoop uur · ${sc.kwh_needed > 0 ? sc.kwh_needed.toFixed(1) + ' kWh' : ''}` : '',
-            sc.kwh_needed > 0 && sc.current_price_eur != null
-              ? `~€${(sc.kwh_needed * sc.current_price_eur).toFixed(0)}` : '',
-            '',
-            `${soc ?? '?'}→<br>${target}%`, 'rgba(55,138,221,.12)', 'color:#378ADD',
-            shortDate(sc.next_charge_local)
-          ));
+        // Status-rij bovenaan (alleen als aangekoppeld)
+        if (sc.connected) {
+          const priceNow = sc.current_price_eur != null ? `€${sc.current_price_eur.toFixed(3)}/kWh` : '';
+          if (sc.charge_now) {
+            const costNow = sc.kwh_needed > 0 && sc.current_price_eur != null
+              ? `~€${Math.round(sc.kwh_needed * sc.current_price_eur)}` : '';
+            rows.push(makeRow('#1D9E75', 'Nu · laadt', priceNow, costNow, `${soc ?? '?'}→<br>${target}%`, 'rgba(29,158,117,.15)', '#5DCAA5', 'nu'));
+          } else {
+            rows.push(makeRow('rgba(128,128,128,.25)', 'Wacht op goedkoop uur', priceNow ? `nu ${priceNow} · te duur` : '', '', `${soc ?? '–'}%`, 'rgba(128,128,128,.1)', 'rgba(128,128,128,.5)', 'nu'));
+          }
         }
-        if (sc.ready_by_local) {
-          rows.push(makeRow(
-            '#378ADD',
-            shortWhen(sc.ready_by_local),
-            `klaar op ${target}%`,
-            '', '',
-            `${target}%`, 'rgba(55,138,221,.12)', 'color:#378ADD',
-            shortDate(sc.ready_by_local)
-          ));
+
+        // Laadvensters (groen = verplicht, blauw = opportunistisch)
+        // Filter vensters zonder netto SoC-bijdrage (artefact van overlappende banden)
+        const meaningful = windows.filter(w => w.to_pct > w.from_pct + 1);
+        if (meaningful.length > 0) {
+          for (const w of meaningful) {
+            const isGreen = w.type === 'mand';
+            const accent       = isGreen ? '#1D9E75' : '#378ADD';
+            const bubbleBg     = isGreen ? 'rgba(29,158,117,.15)' : 'rgba(55,138,221,.12)';
+            const bubbleColor  = isGreen ? '#5DCAA5' : '#85B7EB';
+            const timeStr      = `${shortWhen(w.from_local)} – ${shortWhen(w.to_local)}`;
+            const subParts     = [];
+            if (w.kwh)               subParts.push(`~${w.kwh} kWh`);
+            if (w.avg_price_eur != null) subParts.push(`€${w.avg_price_eur.toFixed(2)}/kWh`);
+            const costStr      = w.cost_eur != null ? `~€${Math.round(w.cost_eur)}` : '';
+            const bubbleHtml   = `${w.from_pct}→<br>${w.to_pct}%`;
+            const dateStr      = shortDate(w.from_local);
+            rows.push(makeRow(accent, timeStr, subParts.join(' · '), costStr, bubbleHtml, bubbleBg, bubbleColor, dateStr));
+          }
+        } else if (windows.length > 0) {
+          // Alle vensters zijn no-op (auto al op doel) — toon eerste als indicatie
+          const w = windows[0];
+          const accent = w.type === 'mand' ? '#1D9E75' : '#378ADD';
+          rows.push(makeRow(accent, `${shortWhen(w.from_local)} – ${shortWhen(w.to_local)}`, `klaar op ${target}%`, '', `${target}%`, 'rgba(128,128,128,.1)', 'rgba(128,128,128,.5)', shortDate(w.from_local)));
+        } else if (!sc.connected) {
+          // Disconnected, nog geen plan berekend
+          rows.push(makeRow('rgba(128,128,128,.2)', 'Plan wordt berekend…', '', '', `${soc ?? '–'}%`, 'rgba(128,128,128,.08)', 'rgba(128,128,128,.4)', ''));
         }
       }
 
@@ -431,14 +367,16 @@
 
       // Hint banner bij afgekoppeld
       const hint = document.getElementById('connHint');
-      if (!sc.connected && sc.next_charge_local) {
+      const firstWin = windows[0];
+      if (!sc.connected && firstWin) {
+        const hintTxt = `ⓘ koppel vóór ${shortDate(firstWin.from_local)} ${shortWhen(firstWin.from_local)} aan om dit plan te halen`;
         if (!hint) {
           const h = document.createElement('div');
           h.id = 'connHint'; h.className = 'hint';
-          h.innerHTML = `ⓘ koppel vóór ${shortWhen(sc.next_charge_local)} aan om dit plan te halen`;
+          h.innerHTML = hintTxt;
           el.after(h);
         } else {
-          hint.innerHTML = `ⓘ koppel vóór ${shortWhen(sc.next_charge_local)} aan om dit plan te halen`;
+          hint.innerHTML = hintTxt;
         }
       } else if (hint) {
         hint.remove();
@@ -480,7 +418,7 @@
 
     async function load() {
       try { applyState(await Homey.api('GET', '/getOverride', {})); }
-      catch (e) { setStatus('Laden mislukt', 'err'); }
+      catch (e) { setStatus('Laden mislukt: ' + (e?.message || String(e)), 'err'); }
       finally { fitHeight(); }
     }
 

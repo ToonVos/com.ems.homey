@@ -78,7 +78,7 @@ class EmsApp extends Homey.App {
   /** Hoeveel de wandklok van `tz` vóórloopt op UTC, op het moment `date` (ms). */
   _tzOffsetMs(date, tz) {
     const p = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit',
+      ...(tz ? { timeZone: tz } : {}), hour12: false, year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit', second: '2-digit',
     }).formatToParts(date).reduce((a, x) => (a[x.type] = x.value, a), {});
     const h = p.hour === '24' ? 0 : Number(p.hour);
@@ -97,16 +97,15 @@ class EmsApp extends Homey.App {
 
   /** Lokale datumdelen (en-CA, h23) van `date` in `tz`. */
   _tzParts(date, tz) {
-    return new Intl.DateTimeFormat('en-CA', {
-      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-    }).formatToParts(date).reduce((a, x) => (a[x.type] = x.value, a), {});
+    const opts = { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' };
+    if (tz) opts.timeZone = tz;
+    return new Intl.DateTimeFormat('en-CA', opts).formatToParts(date).reduce((a, x) => (a[x.type] = x.value, a), {});
   }
 
   /** Eerstvolgende standaard klaar-tijd (instelbaar via ev_default_deadline,
    *  "HH:MM", default 07:00) in de toekomst, als UTC-Date. */
   _nextDefaultDeadline() {
-    const tz = this.homey.clock.getTimezone();
+    const tz = this.homey.clock.getTimezone() || 'Europe/Amsterdam';
     const [hh, mm] = String(this.homey.settings.get('ev_default_deadline') || '07:00')
       .split(':').map(Number);
     const H = Number.isFinite(hh) ? hh : 7;

@@ -491,6 +491,7 @@ class TeslaScheduler {
     let ceilReadyIso = null;   // klaar-tijd plafond
     let nextChargeIso = null;  // eerstvolgend gepland laadmoment
     let selectedCount = 0;
+    let planWindows = [];      // laadvensters voor widget-weergave
     let tier = null;
     let actualCharging = null;   // echte laadstroom (true/false/null=onbekend)
     let carLimitRead = null;     // door de auto gerapporteerde laadlimiet (%)
@@ -500,15 +501,12 @@ class TeslaScheduler {
     let wakeSecs = null;         // hoe lang het wekken duurde, indien deze tick gewekt
     let noPowerOnCable = false;  // kabel ingeplugd maar geen stroom (laadpunt uit / rode kabel)
 
-    if (!connected) {
-      decision = 'skip_disconnected';
-      reason = 'auto niet verbonden';
-    } else if (soc == null) {
-      decision = 'skip_no_soc';
-      reason = 'SoC onbekend';
+    if (soc == null) {
+      decision = !connected ? 'skip_disconnected' : 'skip_no_soc';
+      reason = !connected ? 'auto niet verbonden' : 'SoC onbekend';
     } else if (soc >= ceiling) {
-      decision = 'at_target';
-      reason = `SoC ${soc}% ≥ plafond ${ceiling}%`;
+      decision = !connected ? 'skip_disconnected' : 'at_target';
+      reason = !connected ? 'auto niet verbonden' : `SoC ${soc}% ≥ plafond ${ceiling}%`;
     } else if (soc <= floor) {
       chargeNow = true;
       decision = 'panic_charge';
@@ -579,6 +577,55 @@ class TeslaScheduler {
       const future = [...mandSet, ...oppSet].filter(t => t >= now - SLOT_MIN * 60_000);
       if (future.length) nextChargeIso = new Date(Math.min(...future)).toISOString();
 
+      // Groepeer slots tot laadvensters voor widget (aaneengesloten = zelfde venster)
+      {
+        const allSlots = [];
+        for (const t of mandSet) {
+          const h = horizon.find(x => x.t === t);
+          allSlots.push({ t, price: h?.import_eur ?? null, type: 'mand' });
+        }
+        for (const t of oppSet) {
+          const h = horizon.find(x => x.t === t);
+          allSlots.push({ t, price: h?.import_eur ?? null, type: 'opp' });
+        }
+        allSlots.sort((a, b) => a.t - b.t);
+        const wins = [];
+        for (const slot of allSlots) {
+          const last = wins[wins.length - 1];
+          if (last && slot.t <= last._lastT + SLOT_MIN * 60_000 + 1000) {
+            last._slots.push(slot);
+            last._lastT = slot.t;
+            if (slot.type === 'mand') last.type = 'mand';
+          } else {
+            wins.push({ _slots: [slot], _lastT: slot.t, type: slot.type });
+          }
+        }
+        let runSoc = soc ?? mandatory;
+        planWindows = wins.map(w => {
+          const prices = w._slots.map(s => s.price).filter(p => p != null);
+          const avgPrice = prices.length ? prices.reduce((a, b) => a + b, 0) / prices.length : null;
+          // cost = som van prijs×slotKwh per slot (correct bij variabele slot-prijzen)
+          const totalCost = prices.length === w._slots.length
+            ? prices.reduce((sum, p) => sum + p * slotKwh, 0)
+            : (avgPrice != null ? avgPrice * w._slots.length * slotKwh : null);
+          const kWh = w._slots.length * slotKwh;
+          const deltaSoc = kWh * EFFICIENCY / cap * 100;
+          const fromSoc = Math.round(runSoc);
+          const toSoc   = Math.min(Math.round(runSoc + deltaSoc), mandatory);
+          runSoc = toSoc;
+          return {
+            from_local: this.app.localTime(new Date(w._slots[0].t)),
+            to_local:   this.app.localTime(new Date(w._lastT + SLOT_MIN * 60_000)),
+            avg_price_eur: avgPrice != null ? +avgPrice.toFixed(3) : null,
+            kwh: +kWh.toFixed(1),
+            cost_eur: totalCost != null ? +totalCost.toFixed(1) : null,
+            type: w.type,
+            from_pct: fromSoc,
+            to_pct:   toSoc,
+          };
+        });
+      }
+
       if (kwhNeeded <= 0) {
         // Niets te laden: boven het doel, en opportunistisch al gehaald/op slot.
         chargeNow = false;
@@ -607,6 +654,13 @@ class TeslaScheduler {
       }
     }
 
+    // Slot-berekening loopt ook bij !connected (widget-preview), maar commandos nooit sturen.
+    if (!connected) {
+      chargeNow = false;
+      if (decision !== 'skip_disconnected') decision = 'skip_disconnected';
+      reason = 'auto niet verbonden';
+    }
+
     // Pre-record _last vóór het commando-blok: zodat de widget altijd een status ziet,
     // ook als _readActual() of _drive() hangt (de ring-push wacht op het volledige record).
     // Nota: capPct is pas bekend ná de soc-check → weggelaten hier, staat in de volledige rec.
@@ -619,6 +673,7 @@ class TeslaScheduler {
       ready_by_iso: readyByIso, ready_by_local: readyByIso ? this.app.localTime(new Date(readyByIso)) : null,
       ceil_ready_local: ceilReadyIso ? this.app.localTime(new Date(ceilReadyIso)) : null,
       next_charge_local: nextChargeIso ? this.app.localTime(new Date(nextChargeIso)) : null,
+      plan_windows: planWindows,
       mode: this._isLive() ? 'live' : 'dryrun', current_price_eur: currentPrice,
       updated_local: this.app.localTime(),
     };
@@ -811,6 +866,7 @@ class TeslaScheduler {
       kwh_needed: rec.kwh_needed, ready_by_iso: readyByIso,
       ready_by_local: rec.ready_by_local, ceil_ready_local: rec.ceil_ready_local,
       next_charge_local: rec.next_charge_local,
+      plan_windows: planWindows,
       mode: rec.mode, current_price_eur: currentPrice,
       updated_local: rec.ts_local,
     };
