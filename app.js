@@ -54,7 +54,12 @@ class EmsApp extends Homey.App {
   // daarom via trigger-bruggen die de gebruiker aan de Tesla-flow-acties koppelt.
   async setDeviceCapability(deviceId, capabilityId, value) {
     const dev = await this.getDevice(deviceId);
-    return dev.setCapabilityValue(capabilityId, value);
+    // Timeout op de write zelf: een hangende cloud-call (Tesla offline) mag de
+    // aanroepende tick niet oneindig blokkeren. getDevice() heeft al een eigen timeout.
+    const setPromise = dev.setCapabilityValue(capabilityId, value);
+    // eslint-disable-next-line no-undef
+    const setTimeoutP = new Promise((_, rej) => setTimeout(() => rej(new Error(`setCapability timeout 15s (${capabilityId})`)), 15_000));
+    return Promise.race([setPromise, setTimeoutP]);
   }
 
   // ─── Tesla laaddoel-override (dashboard-widget ems-control) ────────────────

@@ -384,24 +384,28 @@
       }
     }
 
+    // Voer een render-stap uit; een fout in één sectie mag de rest niet slopen.
+    function safe(fn, label) {
+      try { fn(); } catch (e) { console.error('[widget] render-fout in ' + label + ':', e); }
+    }
+
     function applyState(s) {
       if (!s || typeof s !== 'object') return;
       state = s;
       selPct = s.target_pct ?? selPct;
-      renderChips();
-
-      // Header
       const sc = s.scheduler;
-      const connected = sc?.connected;
-      $('connStatus').textContent = connected === true ? '● Aangekoppeld'
-                                  : connected === false ? '○ Afgekoppeld' : '○ –';
-      $('modeBadge').textContent = s.active ? 'HANDMATIG' : 'AUTO';
-      $('modeBadge').className   = 'mode-badge ' + (s.active ? 'mode-manual' : 'mode-auto');
 
-      $('deadline').value = isoToLocalInput(s.deadline_iso, s.tz);
-
-      renderBattery(sc, s.target_pct);
-      renderRows(sc, s);
+      safe(() => renderChips(), 'chips');
+      safe(() => {
+        const connected = sc?.connected;
+        $('connStatus').textContent = connected === true ? '● Aangekoppeld'
+                                    : connected === false ? '○ Afgekoppeld' : '○ –';
+        $('modeBadge').textContent = s.active ? 'HANDMATIG' : 'AUTO';
+        $('modeBadge').className   = 'mode-badge ' + (s.active ? 'mode-manual' : 'mode-auto');
+        $('deadline').value = isoToLocalInput(s.deadline_iso, s.tz);
+      }, 'header');
+      safe(() => renderBattery(sc, s.target_pct), 'battery');
+      safe(() => renderRows(sc, s), 'rows');
     }
 
     function setStatus(msg, kind) {
@@ -421,16 +425,21 @@
     let _retryTimer = null;
     async function load() {
       if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
+      let data;
+      // Stap 1: data ophalen. Alleen een ECHTE API-fout (app herstart/offline) toont
+      // "Herstarten…" + retry. Een render-fout hierna mag het scherm nooit leegmaken.
       try {
-        applyState(await Homey.api('GET', '/getOverride', {}));
-        setStatus('');
+        data = await Homey.api('GET', '/getOverride', {});
       } catch (e) {
-        // App herstart (bijv. na update): toon herstart-bericht en probeer snel opnieuw
         setStatus('Herstarten…', 'warn');
         _retryTimer = setTimeout(load, 5000);
-      } finally {
         fitHeight();
+        return;
       }
+      // Stap 2: renderen (zelf fout-tolerant via safe()).
+      applyState(data);
+      setStatus('');
+      fitHeight();
     }
 
     async function save() {

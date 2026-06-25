@@ -503,6 +503,11 @@ class TeslaScheduler {
     let wakeSecs = null;         // hoe lang het wekken duurde, indien deze tick gewekt
     let noPowerOnCable = false;  // kabel ingeplugd maar geen stroom (laadpunt uit / rode kabel)
 
+    // Gefaseerde-limiet-grenzen — op functie-scope zodat ZOWEL de slot-keuze (hieronder)
+    // ALS het commando-blok (capPct) ze ziet. Stonden eerder binnen de else-tak, waardoor
+    // de capPct-berekening crashte ('HOLD is not defined') zodra soc ≥ 55 (fase 0 voorbij).
+    const HOLD = 80, MID = 90, MIDWIN_MS = 6 * 3_600_000;   // 6u vóór deadline
+
     if (soc == null) {
       decision = !connected ? 'skip_disconnected' : 'skip_no_soc';
       reason = !connected ? 'auto niet verbonden' : 'SoC onbekend';
@@ -516,7 +521,6 @@ class TeslaScheduler {
     } else {
       // Batterijgezondheid: hoge SoC niet lang vasthouden op de NCA-pack.
       const guard = this.homey.settings.get('ev_battery_health') ?? true;
-      const HOLD = 80, MID = 90, MIDWIN_MS = 6 * 3_600_000;   // 6u vóór deadline
       const within  = horizon.filter(h => h.t >= now - SLOT_MIN * 60_000 && h.t < dlMs);
       const fullWin = horizon.filter(h => h.t >= now - SLOT_MIN * 60_000);
 
@@ -687,6 +691,7 @@ class TeslaScheduler {
     let commanded = null, verify = null;
     let capPct = null;
     if (connected && soc != null) {
+     try {
       const want = chargeNow;
       const { charging: actual, limit: carLimit, dc, powerKw, noPower, chargeAdded } = await this._readActual(st);
       actualCharging = actual;        // de Tesla-boolean is leidend (charging_on/charging_state)
@@ -830,6 +835,13 @@ class TeslaScheduler {
         this._lastDriveError = null;
         if (!verify && actual !== null) verify = `ok(limiet ${carLimit ?? '?'}%)`;
       }
+     } catch (err) {
+      // Een fout in de Tesla-aansturing mag de tick NOOIT halverwege afbreken: dan
+      // bevriezen ring/JSONL/widget. Log de fout en val door naar het record (5).
+      this._lastDriveError = err?.message || String(err);
+      this.app.error('[TeslaSched] commando-blok fout:', this._lastDriveError);
+      if (!verify) verify = `fout: ${this._lastDriveError}`;
+     }
     } else {
       this._lastSentWant = null;
       this._mismatchStreak = 0;
