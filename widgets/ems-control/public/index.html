@@ -122,8 +122,9 @@
     .btn:disabled { opacity: .4; cursor: default; }
 
     .status { margin-top: 8px; font-size: 12px; opacity: .7; line-height: 1.3; text-align: center; }
-    .status.err { color: #ef4444; opacity: .95; }
-    .status.ok  { color: #22c55e; opacity: .95; }
+    .status.err  { color: #ef4444; opacity: .95; }
+    .status.ok   { color: #22c55e; opacity: .95; }
+    .status.warn { color: #f59e0b; opacity: .95; }
 
     /* ── Hint banner ── */
     .hint {
@@ -416,10 +417,18 @@
       } catch (_) {}
     }
 
+    let _retryTimer = null;
     async function load() {
-      try { applyState(await Homey.api('GET', '/getOverride', {})); }
-      catch (e) { setStatus('Laden mislukt: ' + (e?.message || String(e)), 'err'); }
-      finally { fitHeight(); }
+      if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
+      try {
+        applyState(await Homey.api('GET', '/getOverride', {}));
+        setStatus('');
+      } catch (e) {
+        // App herstart (bijv. na update): toon herstart-bericht en probeer snel opnieuw
+        setStatus('Herstarten…', 'warn');
+        fitHeight();
+        _retryTimer = setTimeout(load, 5000);
+      }
     }
 
     async function save() {

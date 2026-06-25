@@ -65,7 +65,9 @@ class TeslaScheduler {
   async init() {
     try { fs.mkdirSync(USERDATA_DIR, { recursive: true }); } catch (_) {}
     try { this._bootstrapPluggedSince(); } catch (e) { this.app.error('[TeslaSched] bootstrap-fout:', e.message); }
-    this._tickSafe();
+    // Wacht 30s voor de eerste tick zodat Homey's capability-cache gevuld is.
+    // Zonder vertraging ziet de adapter na herstart alle caps als null → false connected.
+    this.homey.setTimeout(() => this._tickSafe(), 30_000);
     this._timer = this.homey.setInterval(() => this._tickSafe(), PERIOD_MS);
     this.app.log(`[TeslaSched] actief — prijs-gestuurd, ${this._mode()} | vangnet ${PERIOD_MS / 60000}min (primair: push-events)`);
     this._subscribeEvents();   // push: reageer direct op laden-start/stop i.p.v. wachten op de tick
