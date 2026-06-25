@@ -430,7 +430,7 @@
       // Stap 1: data ophalen. Een ECHTE API-fout (app herstart/offline) → snelle retry.
       // Een render-fout hierna (stap 2) mag het scherm nooit leegmaken (safe() per sectie).
       try {
-        data = await Homey.api('GET', '/getOverride');
+        data = await Homey.api('GET', '/getOverride', {});
       } catch (e) {
         _retryCount++;
         // Eerste paar pogingen: kort "Herstarten…" (app komt net op). Blijft het falen,
