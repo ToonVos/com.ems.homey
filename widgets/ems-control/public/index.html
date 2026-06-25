@@ -325,7 +325,7 @@
       } else {
         // Status-rij bovenaan (alleen als aangekoppeld)
         if (sc.connected) {
-          const priceNow = sc.current_price_eur != null ? `€${sc.current_price_eur.toFixed(3)}/kWh` : '';
+          const priceNow = sc.current_price_eur != null ? `€${Number(sc.current_price_eur).toFixed(3)}/kWh` : '';
           if (sc.charge_now) {
             const costNow = sc.kwh_needed > 0 && sc.current_price_eur != null
               ? `~€${Math.round(sc.kwh_needed * sc.current_price_eur)}` : '';
@@ -347,7 +347,7 @@
             const timeStr      = `${shortWhen(w.from_local)} – ${shortWhen(w.to_local)}`;
             const subParts     = [];
             if (w.kwh)               subParts.push(`~${w.kwh} kWh`);
-            if (w.avg_price_eur != null) subParts.push(`€${w.avg_price_eur.toFixed(2)}/kWh`);
+            if (w.avg_price_eur != null) subParts.push(`€${Number(w.avg_price_eur).toFixed(2)}/kWh`);
             const costStr      = w.cost_eur != null ? `~€${Math.round(w.cost_eur)}` : '';
             const bubbleHtml   = `${w.from_pct}→<br>${w.to_pct}%`;
             const dateStr      = shortDate(w.from_local);
@@ -385,8 +385,9 @@
     }
 
     function applyState(s) {
+      if (!s || typeof s !== 'object') return;
       state = s;
-      selPct = s.target_pct;
+      selPct = s.target_pct ?? selPct;
       renderChips();
 
       // Header
