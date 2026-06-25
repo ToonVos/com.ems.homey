@@ -426,8 +426,9 @@
       } catch (e) {
         // App herstart (bijv. na update): toon herstart-bericht en probeer snel opnieuw
         setStatus('Herstarten…', 'warn');
-        fitHeight();
         _retryTimer = setTimeout(load, 5000);
+      } finally {
+        fitHeight();
       }
     }
 
