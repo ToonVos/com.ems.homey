@@ -193,6 +193,16 @@ module.exports = {
     return { ok: true, key, value: homey.settings.get(key) };
   },
 
+  // Lees alle app-settings (lokale API / config-audit). Verbergt token-/secret-achtige keys.
+  async getSettings({ homey }) {
+    const out = {};
+    for (const k of homey.settings.getKeys()) {
+      if (/token|secret|password|refresh/i.test(k)) { out[k] = '***'; continue; }
+      out[k] = homey.settings.get(k);
+    }
+    return out;
+  },
+
   // Diagnose: lijst /userdata-logbestanden, of tail een specifiek bestand.
   async getUserdataFile({ homey, query }) {
     const fs = require('fs'); const path = require('path');
