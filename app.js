@@ -192,6 +192,7 @@ class EmsApp extends Homey.App {
     this.homey.settings.set('tesla_deadline_iso', dl.toISOString());
     this.log(`[Override] Tesla-doel ${pct}% tegen ${this.localTime(dl)}`);
     await this._recalcSafe('tesla_override');
+    this._emitTeslaState();
     return this.getTeslaOverride();
   }
 
@@ -201,6 +202,7 @@ class EmsApp extends Homey.App {
     this.homey.settings.unset('tesla_deadline_iso');
     this.log('[Override] Tesla-doel terug naar auto (60% / 07:00)');
     await this._recalcSafe('tesla_override_clear');
+    this._emitTeslaState();
     return this.getTeslaOverride();
   }
 
@@ -208,6 +210,23 @@ class EmsApp extends Homey.App {
     try {
       if (this.ems?.planningEngine) await this.ems.planningEngine.recalculate(reason);
     } catch (err) { this.error('[Override] recalc-fout:', err.message); }
+  }
+
+  /**
+   * Push de volledige widget-state naar álle ems-control-widgets via een realtime
+   * event. De widget luistert met `Homey.on('ems_tesla_state', …)`. Realtime draait
+   * over een socket.io-kanaal dat auto-reconnect doet — daardoor blijft de widget
+   * updaten ná de verbindings-drops die `Homey.api()` "Widget Not Found" geven (de
+   * pull-call hangt aan een widget-instance die de app na een reconnect niet meer
+   * kent; de realtime-subscription wordt wél automatisch heraangemeld). Fire-and-forget.
+   */
+  async _emitTeslaState() {
+    try {
+      const state = await this.getTeslaOverride();
+      this.homey.api.realtime('ems_tesla_state', state);
+    } catch (err) {
+      this.error('[Widget] realtime-push fout:', err?.message || err);
+    }
   }
 
   // Called by api.js — runs in App context so this.homey has full device access.

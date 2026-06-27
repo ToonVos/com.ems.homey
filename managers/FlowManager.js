@@ -40,6 +40,12 @@ class FlowManager {
     // de scheduler al; hier alleen de flow-trigger zodat de gebruiker eigen automatiseringen kan maken.
     this.homey.on('ems:evNoPower',            ()      => trigger('ev_no_power').trigger());
     this.homey.on('ems:evPowerRestored',      ()      => trigger('ev_power_restored').trigger());
+    // Tesla volgt het laad-commando herhaaldelijk niet (could_not_wake_buses): flow-trigger
+    // mét tokens (error/action), zodat de gebruiker er een eigen actie aan kan hangen.
+    this.homey.on('ems:evChargeStuck',        data    => trigger('ev_charge_stuck').trigger({
+      error:  data?.error  || 'onbekend',
+      action: data?.action || 'start',
+    }));
 
     // EV charging started/stopped
     this.homey.on('ems:evChargingStarted',    data    => {

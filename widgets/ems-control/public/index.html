@@ -122,7 +122,7 @@
     .btn:disabled { opacity: .4; cursor: default; }
 
     .status { margin-top: 8px; font-size: 12px; opacity: .7; line-height: 1.3; text-align: center; }
-    .status.err  { color: #ef4444; opacity: .95; }
+    .status.err  { color: #ef4444; opacity: .95; cursor: pointer; }
     .status.ok   { color: #22c55e; opacity: .95; }
     .status.warn { color: #f59e0b; opacity: .95; }
 
@@ -326,10 +326,27 @@
         // Status-rij bovenaan (alleen als aangekoppeld)
         if (sc.connected) {
           const priceNow = sc.current_price_eur != null ? `€${Number(sc.current_price_eur).toFixed(3)}/kWh` : '';
-          if (sc.charge_now) {
+          const bubble = `${soc ?? '?'}→<br>${target}%`;
+          if (sc.charging_actual === true) {
+            // De auto laadt ÉCHT (Tesla-boolean charging_on/charging_state), niet alleen 'wil'.
             const costNow = sc.kwh_needed > 0 && sc.current_price_eur != null
               ? `~€${Math.round(sc.kwh_needed * sc.current_price_eur)}` : '';
-            rows.push(makeRow('#1D9E75', 'Nu · laadt', priceNow, costNow, `${soc ?? '?'}→<br>${target}%`, 'rgba(29,158,117,.15)', '#5DCAA5', 'nu'));
+            rows.push(makeRow('#1D9E75', 'Nu · laadt', priceNow, costNow, bubble, 'rgba(29,158,117,.15)', '#5DCAA5', 'nu'));
+          } else if (sc.charge_now) {
+            // We WILLEN laden maar de auto laadt (nog) niet. Toon de echte reden i.p.v. 'laadt'.
+            const probleem = sc.no_power || (sc.drive_error && sc.drive_error !== 'null')
+                          || (sc.car_limit != null && sc.car_limit < target);
+            if (probleem) {
+              const r = [];
+              if (sc.no_power) r.push('geen stroom op kabel — laadpunt aan?');
+              else if (sc.drive_error === 'could_not_wake_buses') r.push('auto-bus slaapt — opnieuw proberen');
+              else if (sc.drive_error && sc.drive_error !== 'null') r.push('auto-fout: ' + sc.drive_error);
+              if (sc.car_limit != null && sc.car_limit < target) r.push(`auto-laadlimiet ${sc.car_limit}%`);
+              rows.push(makeRow('#E0A100', '⚠ Wil laden — auto laadt niet', r.join(' · '), '', bubble, 'rgba(224,161,0,.13)', '#E0A100', 'nu'));
+            } else {
+              // Geen concreet probleem → waarschijnlijk opstart-lag (Tesla-poll ~1 min).
+              rows.push(makeRow('rgba(128,128,128,.35)', 'Laden starten…', priceNow, '', bubble, 'rgba(128,128,128,.12)', 'rgba(128,128,128,.6)', 'nu'));
+            }
           } else {
             rows.push(makeRow('rgba(128,128,128,.25)', 'Wacht op goedkoop uur', priceNow ? `nu ${priceNow} · te duur` : '', '', `${soc ?? '–'}%`, 'rgba(128,128,128,.1)', 'rgba(128,128,128,.5)', 'nu'));
           }
@@ -414,42 +431,95 @@
       el.className = 'status' + (kind ? ' ' + kind : '');
     }
 
+    let _lastH = 0;
     function fitHeight() {
       const h = Math.ceil(document.body.scrollHeight) + 4;
+      if (Math.abs(h - _lastH) < 3) return;   // voorkomt ratchet bij herhaalde calls
+      _lastH = h;
       try {
         if (typeof Homey.setHeight === 'function') Homey.setHeight(h);
         else Homey.ready({ height: h });
       } catch (_) {}
     }
 
+    // ── Verbinding: PUSH (primair) + POLL (fallback) ──────────────────────
+    // Probleem: op mobiel valt de link telefoon↔Homey weg/terug (achtergrond,
+    // wifi↔mobiel). Homey ruimt dan de server-side widget-instantie op; de iframe
+    // draait door met een dode instance-id → élke Homey.api() geeft "Widget Not
+    // Found". Een iframe-reload herstelt dit NIET (zelfde dode id wordt door de
+    // parent opnieuw geïnjecteerd); alleen de Homey-app die de widget her-rendert
+    // (opnieuw selecteren) maakt een verse instance. Dat kunnen we van binnenuit
+    // niet forceren — dus leunen we op het REALTIME-kanaal: de app pusht state via
+    // `homey.api.realtime('ems_tesla_state', …)`; dat socket.io-abonnement doet
+    // auto-reconnect en blijft updaten waar de pull-call dood is. De api()-call
+    // blijft alleen voor de eerste paint + als trage fallback (best-effort).
+    let _lastOkTs = 0;
+    let _startTs  = 0;
     let _retryTimer = null;
-    let _retryCount = 0;
-    async function load() {
-      if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
-      let data;
-      // Stap 1: data ophalen. Een ECHTE API-fout (app herstart/offline) → snelle retry.
-      // Een render-fout hierna (stap 2) mag het scherm nooit leegmaken (safe() per sectie).
-      try {
-        data = await Homey.api('GET', '/getOverride', {});
-      } catch (e) {
-        _retryCount++;
-        // Eerste paar pogingen: kort "Herstarten…" (app komt net op). Blijft het falen,
-        // toon de echte fout zodat het diagnosticeerbaar is i.p.v. eeuwig "Herstarten".
-        if (_retryCount <= 3) {
-          setStatus('Verbinden…', 'warn');
-          _retryTimer = setTimeout(load, 1500);
-        } else {
-          setStatus('Geen verbinding met de app: ' + (e?.message || e?.code || String(e)), 'err');
-          _retryTimer = setTimeout(load, 5000);
-        }
-        fitHeight();
-        return;
-      }
-      // Stap 2: renderen (zelf fout-tolerant via safe()).
-      _retryCount = 0;
+    const BLANK_GRACE_MS = 8_000;    // nooit geladen: na 8s → tikbare optie
+    const STALE_MS       = 130_000;  // eerder geladen: na ~2 gemiste polls → idem
+
+    function applyGood(data) {
+      if (!data) return;
+      _lastOkTs = Date.now();
       applyState(data);
       setStatus('');
       fitHeight();
+    }
+
+    // Best-effort pull. Faalt stil (scherm blijft staan); de UI-staat wordt door
+    // refreshConnUI bepaald, herstel door de realtime-push of een volgende poging.
+    async function load() {
+      try { applyGood(await Homey.api('GET', '/getOverride', {})); } catch (_) {}
+    }
+
+    function connState() {
+      const now = Date.now();
+      if (_lastOkTs) return (now - _lastOkTs > STALE_MS) ? 'lost' : 'ok';
+      return (now - _startTs > BLANK_GRACE_MS) ? 'lost' : 'connecting';
+    }
+
+    // Toont snel (≤8s) de handmatige optie i.p.v. eindeloos "Verbinden…".
+    // Reageert ALLEEN op een echte staat-wissel (niet elke seconde) zodat fitHeight
+    // niet in een ratchet-lus belandt die de widget met lege ruimte laat groeien.
+    let _lastConnState = null;
+    function refreshConnUI() {
+      const s = connState();
+      if (s === _lastConnState) return;
+      _lastConnState = s;
+      if (s === 'ok') return;                       // status door applyGood beheerd
+      setStatus(s === 'connecting' ? 'Verbinden…' : 'Geen verbinding — tik om te verbinden',
+                s === 'connecting' ? 'warn' : 'err');
+      fitHeight();
+    }
+
+    // Auto-reconnect = de tik, maar automatisch. Een reload herstelt alleen als de
+    // app in de VOORGROND staat (brug live). Dat moment is exact wanneer de widget
+    // weer zichtbaar wordt → luister op visibilitychange/pageshow en doe dán hetzelfde
+    // als een handmatige tik: eerst een goedkope pull, en blijft het stil → reload.
+    let _lastReloadTs = 0;
+    function reconnectIfStale() {
+      if (document.visibilityState === 'hidden') return;
+      if (connState() !== 'lost') return;
+      load();                                   // goedkope poging; soms al genoeg
+      const now = Date.now();
+      if (now - _lastReloadTs < 5_000) return;  // loop-guard
+      _lastReloadTs = now;
+      setTimeout(() => {                        // alleen reloaden als pull niet herstelde
+        if (connState() === 'lost') { try { location.reload(); } catch (_) {} }
+      }, 700);
+    }
+    document.addEventListener('visibilitychange', reconnectIfStale);
+    window.addEventListener('pageshow', reconnectIfStale);
+
+    // Adaptieve retry: snel in de eerste ~12s (zodat 't bij opstart vlot pakt),
+    // daarna rustig. De realtime-push kan tussendoor altijd herstellen.
+    function scheduleRetry() {
+      if (_retryTimer) clearTimeout(_retryTimer);
+      const s = connState();
+      const fast = s !== 'ok' && Date.now() - (_lastOkTs || _startTs) < 12_000;
+      const delay = s === 'ok' ? 60_000 : (fast ? 2_000 : 30_000);
+      _retryTimer = setTimeout(async () => { await load(); refreshConnUI(); scheduleRetry(); }, delay);
     }
 
     async function save() {
@@ -457,6 +527,7 @@
       try {
         const iso = localInputToIso($('deadline').value, state.tz);
         const s = await Homey.api('POST', '/setOverride', { target_pct: selPct, deadline_iso: iso });
+        _lastOkTs = Date.now();
         applyState(s);
         setStatus('Opgeslagen ✓', 'ok');
       } catch (e) {
@@ -467,6 +538,7 @@
     async function auto() {
       setStatus('Terug naar auto…');
       try {
+        _lastOkTs = Date.now();
         applyState(await Homey.api('POST', '/clearOverride', {}));
         setStatus('Auto-modus ✓', 'ok');
       } catch (e) {
@@ -480,9 +552,21 @@
         c.addEventListener('click', () => { selPct = Number(c.dataset.pct); renderChips(); }));
       $('save').addEventListener('click', save);
       $('auto').addEventListener('click', auto);
+      // Vangnet: tik op de foutmelding = volledige re-handshake. In de praktijk
+      // herstelt dit wél (de tik her-focust de widget zodat de reload op een verse
+      // sessie landt) — handmatig laatste redmiddel bovenop de realtime-push.
+      $('status').addEventListener('click', () => {
+        if ($('status').classList.contains('err')) { try { location.reload(); } catch (_) {} }
+      });
+
+      // PRIMAIR: realtime-push van de app. Overleeft de drops die api() doodmaken.
+      try { Homey.on('ems_tesla_state', applyGood); } catch (_) {}
+
+      _startTs = Date.now();
       Homey.ready();
-      load();
-      setInterval(load, 60_000);
+      load();                            // eerste paint via pull
+      setInterval(refreshConnUI, 1_000); // ververst de verbindings-melding (geen netwerk)
+      scheduleRetry();                   // adaptieve retry + trage fallback-poll
     }
   </script>
 </body>

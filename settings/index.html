@@ -21,7 +21,7 @@
       'ev_min_on_min', 'ev_min_off_min',
       'price_btw_factor', 'price_energy_tax_eur', 'price_supplier_fee_eur',
       'price_export_bonus_eur', 'price_export_factor', 'ev_session_cost_eur',
-      'ev_charge_efficiency',
+      'ev_charge_efficiency', 'ev_price_granularity',
     ];
 
     var BEHAVIOR_KEYS = [
@@ -41,7 +41,7 @@
       'tesla_scheduler_mode', 'ev_default_deadline',
       'price_btw_factor', 'price_energy_tax_eur', 'price_supplier_fee_eur',
       'price_export_bonus_eur', 'price_export_factor', 'ev_session_cost_eur',
-      'ev_charge_efficiency',
+      'ev_charge_efficiency', 'ev_price_granularity',
     ];
 
     var DEVICE_BOOL_KEYS = ['hasBattery', 'hasEv', 'hasEvCharger', 'hasHeatPump', 'ev_night_charge'];
@@ -743,10 +743,11 @@
               <select id="evDeviceId"><option value="">— Geen —</option></select>
             </div>
             <div class="field">
-              <label>Capaciteit (kWh)</label>
-              <input type="number" id="ev_capacity_kwh" value="75" min="10" max="200" />
+              <label>Accu-capaciteit (kWh)</label>
+              <input type="number" id="ev_capacity_kwh" value="100" min="10" max="200" />
             </div>
           </div>
+          <p class="hint">Bruikbare accu-capaciteit van de auto — bepaalt hoeveel kWh per procent SoC en dus de geplande laadhoeveelheid. Tesla 100D/100-pakket ≈ <b>100</b>, 90D ≈ 90, Model 3/Y Long Range ≈ 75, Standard Range ≈ 55. Zet dit correct; staat 'ie te laag, dan plant het systeem te weinig.</p>
           <label style="margin-top:2px">Wall Connector IP <span style="font-weight:400;font-size:11px">(optioneel — voor lokale meting)</span></label>
           <input type="text" id="wallConnectorIp" placeholder="bijv. 192.168.1.50" style="font-family:monospace;margin-bottom:6px" />
           <div class="sub-toggle">
@@ -800,7 +801,15 @@
             <input type="checkbox" id="ev_battery_health" />
             <label for="ev_battery_health">Batterijgezondheid bewaken</label>
           </div>
-          <p class="hint">Houdt de accu langer goed door hoge SoC niet lang vast te houden: tot 80% wordt in de goedkoopste uren geladen; <b>80–90%</b> pas in goedkope uren ≤6&nbsp;uur vóór de klaar-tijd; de <b>laatste 10% (90–100%)</b> pas op het laatste moment vóór de klaar-tijd. Uit = altijd puur de goedkoopste uren. (Opportunistisch laden gaat tot max 85%, hooguit 1× per week.)</p>
+          <p class="hint">Houdt de accu langer goed door hoge SoC niet lang vast te houden. Boven 80% telt de planner een <b>aging-premie</b> bij de stroomprijs op (oploopt met hoe lang die hoge SoC vastgehouden wordt) — daardoor schuift het laden van de laatste procenten vanzelf richting de klaar-tijd, maar alleen zolang het geld dat rechtvaardigt. Uit = altijd puur de goedkoopste uren. (Opportunistisch laden gaat tot max 85%, hooguit 1× per week.)</p>
+
+          <!-- Prijs-granulariteit -->
+          <label style="margin-top:12px">Prijs-eenheid</label>
+          <select id="ev_price_granularity">
+            <option value="quarter">Kwartierprijzen — EPEX 15-min (sinds 1-10-2025)</option>
+            <option value="hourly">Uurprijzen — 4 kwartieren gemiddeld (o.a. Zonneplan)</option>
+          </select>
+          <p class="hint">Kies de eenheid waarop jouw leverancier <b>afrekent</b>. Zonneplan blijft bewust op uurprijzen (gemiddelde van de 4 kwartieren). Op 'uurprijzen' plant de EMS per uur, zodat hij niet binnen een uur fragmenteert (schijn-winst + extra wake-kosten). Standaard: kwartierprijzen.</p>
 
           <!-- Laadstrategie -->
           <h3>Laadstrategie</h3>

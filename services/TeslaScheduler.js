@@ -41,10 +41,15 @@ const WEEK_MS      = 7 * 24 * 60 * 60 * 1000;  // opportunistisch hooguit 1×/we
 const RECONCILE_MS = 5 * 60 * 1000;    // min. tussen herhaalde bijstuur-commando's
 const FAIL_RETRY_MS = 90 * 1000;       // sneller opnieuw na een mislukte sturing (met wake)
 const VERIFY_MS    = 60 * 1000;        // na een nog-niet-bevestigd commando: ~1 min later opnieuw kijken
-const GIVEUP_MS     = 30 * 60 * 1000;  // na opgeven: lang terug (geen wake-credits verbranden)
+const GIVEUP_MS     = 10 * 60 * 1000;  // na opgeven: elke ~10 min nóg een wake-poging zolang we willen laden (gebruikersregel) i.p.v. 30 min stil
 const MAX_DRIVE_ATTEMPTS = 5;          // na zoveel mislukte pogingen: melden + backoff
 const WAKE_WAIT_MS = 30 * 1000;        // max wachten tot de auto 'online' is ná een wake-commando
 const WAKE_POLL_MS = 3 * 1000;         // poll-interval van car_state tijdens dat wachten
+// Bus-settle: ook ná car_state='online' hebben de Tesla COMMANDO-bussen nawerktijd nodig
+// vóór ze vehicle-commando's (laden/limiet) accepteren. Te vroeg sturen = could_not_wake_buses.
+// Daarom ná 'online' nog even wachten (+ herbevestigen wakker) vóór we commando's sturen.
+const BUS_SETTLE_MS       = 12 * 1000; // standaard nawerktijd na 'online'
+const BUS_SETTLE_RETRY_MS = 22 * 1000; // langer als de vorige poging op could_not_wake_buses strandde
 
 class TeslaScheduler {
 
@@ -170,7 +175,7 @@ class TeslaScheduler {
     const cfg    = this.app.ems?.config?.ev || {};
     const maxA   = this.homey.settings.get('ev_max_current_a') ?? cfg.maxAmps ?? 16;
     const phases = this.homey.settings.get('ev_phases') ?? cfg.phases ?? 3;
-    const cap    = this.homey.settings.get('ev_capacity_kwh') ?? cfg.capacityKwh ?? 75;
+    const cap    = this.homey.settings.get('ev_capacity_kwh') ?? cfg.capacityKwh ?? 100;
     const floor  = this.homey.settings.get('ev_floor_soc') ?? 20;  // PANIC-vloer (instelbaar)
     const powerKw = (maxA * phases * VOLTAGE) / 1000;
     return { maxA, phases, cap, floor, powerKw };
@@ -182,8 +187,32 @@ class TeslaScheduler {
     return d.prices || 'cc19fcf6-8f6f-4174-8f9b-6163b630f360';
   }
 
+  /** Prijs-granulariteit. Zonneplan (en andere leveranciers) rekenen per UUR af
+   *  ook al is EPEX sinds 1-10-2025 kwartier-resolutie: ze middelen de 4 kwartieren
+   *  tot één uurprijs. Bij setting `ev_price_granularity = 'hourly'` doen wij dat ook,
+   *  zodat de planner (a) op de echte afrekeneenheid plant en (b) niet binnen een uur
+   *  fragmenteert (schijn-winst + extra wake-kosten). Default 'quarter' = ongewijzigd. */
+  _applyGranularity(horizon) {
+    if ((this.homey.settings.get('ev_price_granularity') || 'quarter') !== 'hourly') return horizon;
+    const HOUR = 3_600_000;
+    const byHour = new Map();
+    for (const s of horizon) {
+      const hs = Math.floor(s.t / HOUR) * HOUR;
+      if (!byHour.has(hs)) byHour.set(hs, []);
+      byHour.get(hs).push(s);
+    }
+    for (const group of byHour.values()) {
+      const vals = group.map(s => s.import_eur).filter(v => v != null);
+      if (!vals.length) continue;
+      const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+      group.forEach(s => { s.import_eur = avg; });
+    }
+    return horizon;
+  }
+
   /** EpexPredictor-horizon (15-min, all-in) met PbtH-overlay: de eerstvolgende
-   *  8 uur krijgen de échte beursprijzen (meter_price_h0..h7) i.p.v. forecast. */
+   *  8 uur krijgen de échte beursprijzen (meter_price_h0..h7) i.p.v. forecast.
+   *  Optioneel per uur gemiddeld via `_applyGranularity` (Zonneplan = uurprijzen). */
   async _blendedHorizon() {
     const base = (this.app.pricePredictor?.getHorizon() || [])
       .map(h => ({ ...h, t: new Date(h.ts).getTime() }));
@@ -201,7 +230,7 @@ class TeslaScheduler {
           const hs = Math.floor(s.t / HOUR) * HOUR;
           if (actual.has(hs)) { s.import_eur = actual.get(hs); s.actual = true; this._lastOverlay++; }
         }
-        if (this._lastOverlay) return base;   // volledige actuals → klaar
+        if (this._lastOverlay) return this._applyGranularity(base);   // volledige actuals → klaar
       }
     } catch (_) { /* val terug op PbtH-overlay */ }
 
@@ -216,7 +245,7 @@ class TeslaScheduler {
         pbth.push(v == null ? null : v);
       }
     } catch (_) { pbth = null; }
-    if (!pbth || pbth.every(v => v == null)) return base;
+    if (!pbth || pbth.every(v => v == null)) return this._applyGranularity(base);
 
     const nowHourStart = Math.floor(Date.now() / HOUR) * HOUR;
     for (const s of base) {
@@ -227,7 +256,7 @@ class TeslaScheduler {
         this._lastOverlay++;
       }
     }
-    return base;
+    return this._applyGranularity(base);
   }
 
   /** Device-id van de Tesla-batterij (waar de laad-flow-acties op zitten). */
@@ -314,10 +343,14 @@ class TeslaScheduler {
    * Wekt de auto en WACHT tot hij echt 'online' is (car_state op het AUTO-device) vóór we
    * een commando sturen — anders landt het laad-commando op een nog-slapende auto en geeft
    * `could_not_wake_buses`, met een onnodige tweede wake op de volgende tick tot gevolg.
+   * Ná 'online' nog een BUS-SETTLE-wachttijd (de commando-bussen accepteren pas ná een korte
+   * nawerktijd vehicle-commando's) + herbevestiging dat de auto nog wakker is. Pas dáárna
+   * geeft de aanroeper z'n commando's, zodat ze op een écht klaarstaande auto landen.
    * Logt hoe lang het wekken duurde (zichtbaar in rec.wake_secs en de app-log).
-   * @returns {boolean} of de auto binnen de timeout online kwam.
+   * @param {number} settleMs nawerktijd na 'online' vóór commando's (langer bij eerdere bus-fout).
+   * @returns {boolean} of de auto binnen de timeout online kwam én wakker bleef.
    */
-  async _wake() {
+  async _wake(settleMs = BUS_SETTLE_MS) {
     const t0 = Date.now();
     // Wekken via de SETTABLE capability `car_wake_up` (boolean), NIET via de flow-actie:
     // flow-acties van een ander app-device vereisen de `homey.flow`-scope, die een app niet
@@ -334,12 +367,20 @@ class TeslaScheduler {
       await this._sleep(WAKE_POLL_MS);
       cs = await this._carState();
     }
+    let online = cs === 'online';
+    // Bus-settle: ná 'online' even wachten zodat de commando-bussen klaar zijn, dan
+    // herbevestigen dat de auto nog wakker is (niet teruggevallen naar asleep). Pas als
+    // dát klopt mogen er commando's volgen — anders had de wake geen blijvend effect.
+    if (online && settleMs > 0) {
+      await this._sleep(settleMs);
+      cs = await this._carState();
+      online = cs === 'online';
+    }
     const secs = +((Date.now() - t0) / 1000).toFixed(1);
-    const online = cs === 'online';
     this._lastWakeSecs = secs; this._lastWakeOnline = online;
     if (online) this._ewmaSet('tesla_learn_wake_secs', secs, 0.3, 0, 120, 1);   // fase A: leer wektijd
     this._lastAmps = null; this._lastLimit = null;          // forceer her-sturing van amps/limiet
-    this.app.log(`[TeslaSched] wake → car_state=${cs} na ${secs}s (online=${online})`);
+    this.app.log(`[TeslaSched] wake → car_state=${cs} na ${secs}s (online=${online}, settle ${Math.round(settleMs/1000)}s)`);
     return online;
   }
 
@@ -360,6 +401,8 @@ class TeslaScheduler {
       this.homey.clearTimeout(hangGuard);
       this._ticking = false;
     }
+    // Push de verse state naar de widgets (realtime, overleeft api()-drops).
+    this.app._emitTeslaState?.();
   }
 
   async _tick() {
@@ -506,7 +549,7 @@ class TeslaScheduler {
     // Gefaseerde-limiet-grenzen — op functie-scope zodat ZOWEL de slot-keuze (hieronder)
     // ALS het commando-blok (capPct) ze ziet. Stonden eerder binnen de else-tak, waardoor
     // de capPct-berekening crashte ('HOLD is not defined') zodra soc ≥ 55 (fase 0 voorbij).
-    const HOLD = 80, MID = 90, MIDWIN_MS = 6 * 3_600_000;   // 6u vóór deadline
+    const HOLD = 80;   // drempel waarboven calendar-aging gaat tellen (Keil-plateau, d10)
 
     if (soc == null) {
       decision = !connected ? 'skip_disconnected' : 'skip_no_soc';
@@ -530,39 +573,63 @@ class TeslaScheduler {
         return to > from ? (to - from) / 100 * cap / EFFICIENCY : 0;
       };
 
-      // Verplichte vulling per band — venster afhankelijk van gezondheid-bewaking:
-      //   0–80%  : goedkoopste uren tot deadline
-      //   80–90% : alleen ≤6u vóór deadline (guard), anders overal tot deadline
-      //   90–100%: pas op het laatste moment vóór deadline (guard), anders goedkoopst
+      // Verplichte vulling — ÉÉN aaneengesloten-bewuste keuze op echt geld (d10):
+      //   effectieve prijs = stroomprijs + aging-premie/kWh (calendar-aging boven 80%).
+      // Geen binaire 6u-grens of 'laatste moment' meer; de premie duwt hoge-SoC-slots
+      // vanzelf richting de deadline (kortere hold = minder aging) zolang het geld het
+      // rechtvaardigt. Eén call → wake-/sessie-kost (C_session) wordt één keer per
+      // aaneengesloten run van het HELE plan geteld (geen dubbeltelling tussen banden).
       const mandSet = new Set();
       const addAll = (st) => { st.set.forEach(t => mandSet.add(t)); };
+      const sessionEur = this.homey.settings.get('ev_session_cost_eur') ?? 0.10;
 
       // Fase 0: bewaarstand-fase — bereik vacationSoc (55%) binnen 24u ná inplugging
       // als SoC nog onder 55%. Ongeacht far/near deadline: een auto op 36% moet snel
       // naar een aging-vriendelijke ruststand, niet wachten op slots over 2+ dagen.
+      // AANEENGESLOTEN-bewust (net als de hoofdvulling): _pickContiguousOptimal i.p.v.
+      // _pickCheapest, anders grijpt Fase 0 losse goedkoopste kwartiertjes (bij vlakke
+      // uurprijzen: de vroegste) → een geïsoleerd blokje los van het hoofdblok = extra
+      // wake/sessie-kost voor niets. Nu betaalt ook Fase 0 C_session per run.
       const holdHorizonMs0 = (this.homey.settings.get('ev_hold_horizon_h') ?? 24) * 3_600_000;
       const holdDeadlineMs = this._pluggedSince
         ? Math.min(this._pluggedSince + holdHorizonMs0, dlMs)
         : Math.min(now + holdHorizonMs0, dlMs);
+      let reservedKwh = 0;   // wat Fase 0 al dekt — niet nóg eens door de hoofdvulling
       if (soc < vacationSoc && holdDeadlineMs > now) {
         const kwhHold0 = (vacationSoc - soc) / 100 * cap / EFFICIENCY;
         const holdWin0 = within.filter(h => h.t < holdDeadlineMs);
-        if (holdWin0.length > 0) addAll(this._pickCheapest(holdWin0, kwhHold0, slotKwh, mandSet));
+        if (holdWin0.length > 0) {
+          const r = this._pickContiguousOptimal(holdWin0, kwhHold0, slotKwh, mandSet, sessionEur);
+          addAll(r);
+          reservedKwh = r.count * slotKwh;
+        }
       }
+      // Verplichte vulling soc→doel + overhead (ramp, ≈1 slot langer zodat de auto
+      // echt op doel komt — fase C). Alleen als er iets te laden valt.
+      // soc→mandatory, MINUS wat Fase 0 al reserveerde (anders telt het stuk
+      // soc→vacationSoc dubbel → vensters die te veel kWh tonen, zie d10/dashboard-bug).
+      const needTotKwh  = Math.max(0, bandKwh(0, 100) - reservedKwh);
+      const overheadKwh = needTotKwh > 0 ? (this._overheadMin() / 60) * effRate : 0;
 
-      // 0–80%-band: aaneengesloten-bewust (fase B) — doorladen waar het loont, splitsen
-      // alleen als de prijsbesparing > C_session. Banden 80-90/90-100 blijven deadline-gestuurd.
-      const sessionEur = this.homey.settings.get('ev_session_cost_eur') ?? 0.10;
-      // Overhead (ramp) als extra energie bij de hoofd-vulling, zodat het blok ~1 slot
-      // langer is en de auto echt op doel komt (fase C). Alleen als er iets te laden valt.
-      const band0 = bandKwh(0, HOLD);
-      const overheadKwh = band0 > 0 ? (this._overheadMin() / 60) * effRate : 0;
-      addAll(this._pickContiguousOptimal(within, band0 + overheadKwh, slotKwh, mandSet, sessionEur));
-      const win8090 = guard ? within.filter(h => h.t >= dlMs - MIDWIN_MS) : within;
-      addAll(this._pickCheapest(win8090, bandKwh(HOLD, MID), slotKwh, mandSet));
-      addAll(guard
-        ? this._pickLatest(within,   bandKwh(MID, 100), slotKwh, mandSet)
-        : this._pickCheapest(within, bandKwh(MID, 100), slotKwh, mandSet));
+      // Aging-premie/kWh per slot (d10, room-temp, géén temp-correctie):
+      //   kost = (hoogte_boven_80 / 10) × €/u·10% × hold_uren_tot_deadline
+      // Geschaald met de fractie van de vulling die bóven 80% komt (fHigh), zodat een
+      // doel ≤80% premie 0 krijgt en een hoog doel de premie zwaarder weegt. heightMid =
+      // representatieve hoogte boven 80 van de hoge band ((80+doel)/2 − 80).
+      const highKwh   = bandKwh(HOLD, 100);
+      const fHigh     = needTotKwh > 0 ? highKwh / needTotKwh : 0;
+      const heightMid = Math.max(0, (Math.min(mandatory, 100) + HOLD) / 2 - HOLD);
+      const agingRate = this.homey.settings.get('ev_aging_eur_h_per_10pct') ?? 0.027;
+      const agingOn   = guard && fHigh > 0 && heightMid > 0;
+      const premPerKwh = (t) => {
+        if (!agingOn) return 0;
+        const holdH = Math.max(0, (dlMs - t) / 3_600_000);
+        return fHigh * (heightMid / 10) * agingRate * holdH / slotKwh;   // €/kWh
+      };
+      // Effectieve horizon = stroomprijs + aging-premie. _pickContiguousOptimal
+      // minimaliseert Σ(eff_prijs·kWh) + n_runs × C_session → echt geld + wake-discipline.
+      const effWithin = within.map(h => ({ ...h, import_eur: (h.import_eur ?? 0) + premPerKwh(h.t) }));
+      addAll(this._pickContiguousOptimal(effWithin, needTotKwh + overheadKwh, slotKwh, mandSet, sessionEur));
 
       // Opportunistisch tot plafond (≤85%), hele horizon, excl. verplicht.
       // Hooguit 1× per week: na het bereiken van het plafond 7 dagen op slot.
@@ -731,8 +798,19 @@ class TeslaScheduler {
       //   Fase 0 (SoC < 55, target > 55) : limiet = 55 (aging-vriendelijke parkeer-SoC)
       //   Fase 1 (55 ≤ SoC < 80, target > 80): limiet = 80 (tripvoorbereiding)
       //   Fase 2 (SoC ≥ 80 of target ≤ 80) : limiet = mandatory (einddoel, incl. 80-90 guard)
+      //
+      // UITZONDERING (gebruikersregel 27 jun): laadt het HUIDIGE aaneengesloten venster
+      // (planWindows[0]) zónder pauze dóór de 55%-bewaardrempel heen naar een hogere
+      // drempel, zet de limiet dan bij de START meteen op dat venster-eind i.p.v. op 55.
+      // De auto is bij de start tóch wakker (we sturen sowieso een start-commando), dus we
+      // kunnen alle commando's direct geven en hoeven 'm niet later op 55% opnieuw te wekken
+      // (dat is precies waar `could_not_wake_buses` toesloeg). Pauzeert het venster wél op
+      // ~55 (gat in de slots vóór het doel), dan blijft de fail-safe 55-limiet staan.
+      const runEndPct = (planWindows && planWindows.length) ? planWindows[0].to_pct : null;
+      const contThrough55 = want && runEndPct != null && runEndPct > vacationSoc;
       capPct = Math.max(50, Math.min(100, Math.round(
         (want && tier === 'opportunistisch') ? ceiling :
+        contThrough55                                 ? Math.min(runEndPct, mandatory) :
         (soc < vacationSoc && mandatory > vacationSoc) ? vacationSoc :
         (soc < HOLD       && mandatory > HOLD)        ? HOLD :
         mandatory
@@ -814,9 +892,19 @@ class TeslaScheduler {
           //    alleen tijd + een extra wake later;
           //  • anders pas bij herhaalde mismatch / na een mislukte sturing.
           const startAsleep = want2 && carStateRead != null && carStateRead !== 'online';
-          const needWake = actual !== null && !givenUp &&
-                           (lastFailed || this._mismatchStreak >= 2 || startAsleep);
-          if (needWake) { await this._wake(); wakeSecs = this._lastWakeSecs; verify = `wake#${this._mismatchStreak} (${wakeSecs}s)`; }
+          // Normaal geen wake ná opgeven (credits sparen) — MAAR zolang we willen laden
+          // (`want2`) blijft de scheduler het elke ~10 min (GIVEUP_MS) opnieuw met een wake
+          // proberen i.p.v. 30 min stil te vallen (gebruikersregel: "na ~10 min nóg een wake").
+          const needWake = actual !== null &&
+                           (lastFailed || this._mismatchStreak >= 2 || startAsleep) &&
+                           (!givenUp || want2);
+          if (needWake) {
+            // Langere bus-settle als de vorige poging juist op could_not_wake_buses strandde:
+            // de bussen hadden méér nawerktijd nodig. Pas dán sturen we het commando.
+            const settle = (this._lastDriveError === 'could_not_wake_buses') ? BUS_SETTLE_RETRY_MS : BUS_SETTLE_MS;
+            const woke = await this._wake(settle); wakeSecs = this._lastWakeSecs;
+            verify = `wake#${this._mismatchStreak} (${wakeSecs}s${woke ? '' : ', niet wakker'})`;
+          }
           const ok = await this._drive(want2, limitTarget);
           if (!ok) commanded = null;
           if (this._mismatchStreak === MAX_DRIVE_ATTEMPTS) {
@@ -824,6 +912,12 @@ class TeslaScheduler {
               `⚠️ Tesla volgt het ${want2 ? 'start' : 'stop'}-commando niet (${this._lastDriveError || '?'}). Ik probeer het minder vaak; controleer de auto/Tesla-app.`,
               'tesla'
             );
+            // Flow-trigger zodat de gebruiker er een eigen automatisering aan kan hangen
+            // (bv. push-bericht "open de Tesla-app"). Tokens: error + start/stop-actie.
+            this.homey.emit('ems:evChargeStuck', {
+              error:  this._lastDriveError || 'onbekend',
+              action: want2 ? 'start' : 'stop',
+            });
           }
         }
         this._lastSentWant = want2;
@@ -871,17 +965,15 @@ class TeslaScheduler {
       next_charge_local: nextChargeIso ? this.app.localTime(new Date(nextChargeIso)) : null,
       commanded, verify, drive_error: this._lastDriveError || null, cmd_count_today: this._cmdCount,
     };
+    // this._last = wat de widget via getStatus() leest. Neem het VOLLEDIGE rec over
+    // (incl. car_limit, car_state, drive_error, phase_limit_pct, commanded, verify,
+    // cmd_count_today) zodat de widget de échte laad-/probleemstatus kan tonen i.p.v.
+    // alleen de intentie. Plus de widget-only velden die niet in rec zitten.
     this._last = {
-      decision, reason, charge_now: chargeNow, tier,
-      connected, soc, charging_actual: actualCharging, no_power: noPowerOnCable,
-      away_dc: awayDc, charge_power_kw: chargePowerKw,
+      ...rec,
       ev_energy_ac_kwh: this._evTotalAcKwh ?? 0,
-      target_pct: mandatory, ceiling_pct: ceiling,
-      kwh_needed: rec.kwh_needed, ready_by_iso: readyByIso,
-      ready_by_local: rec.ready_by_local, ceil_ready_local: rec.ceil_ready_local,
-      next_charge_local: rec.next_charge_local,
+      ready_by_iso: readyByIso,
       plan_windows: planWindows,
-      mode: rec.mode, current_price_eur: currentPrice,
       updated_local: rec.ts_local,
     };
     this._ring.push(rec);
@@ -1158,23 +1250,6 @@ class TeslaScheduler {
 
     best.idxs.forEach(i => set.add(avail[i].t));
     count = set.size; lastTs = set.size ? Math.max(...set) : null;
-    return { set, count, lastTs };
-  }
-
-  /** Laatste slots vóór de deadline (voor de 90–100%-band: 'pas op het laatste
-   *  moment laden'). Kiest chronologisch van achteren, ongeacht prijs. */
-  _pickLatest(slots, kwhNeeded, slotKwh, excludeSet) {
-    const set = new Set();
-    let count = 0, acc = 0, lastTs = null;
-    if (kwhNeeded <= 0 || slotKwh <= 0) return { set, count, lastTs };
-    const sorted = slots
-      .filter(s => !excludeSet || !excludeSet.has(s.t))
-      .sort((a, b) => b.t - a.t);              // nieuwste (dichtst bij deadline) eerst
-    for (const s of sorted) {
-      if (acc >= kwhNeeded) break;
-      set.add(s.t); acc += slotKwh; count++;
-    }
-    if (set.size) lastTs = Math.max(...set);
     return { set, count, lastTs };
   }
 

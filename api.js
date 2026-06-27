@@ -185,6 +185,14 @@ module.exports = {
     };
   },
 
+  // Generieke setting-setter (lokale API / debug). Zet één app-setting.
+  async setSetting({ homey, body }) {
+    const { key, value } = body || {};
+    if (!key || typeof key !== 'string') throw new Error('key (string) vereist');
+    homey.settings.set(key, value);
+    return { ok: true, key, value: homey.settings.get(key) };
+  },
+
   // Diagnose: lijst /userdata-logbestanden, of tail een specifiek bestand.
   async getUserdataFile({ homey, query }) {
     const fs = require('fs'); const path = require('path');

@@ -275,6 +275,43 @@
           "en": "Triggers when power returns to the cable after a no-power situation.",
           "nl": "Triggert als er weer stroom op de kabel staat na een no-power-situatie."
         }
+      },
+      {
+        "id": "ev_charge_stuck",
+        "title": {
+          "en": "EV: charge command not followed",
+          "nl": "EV: laadcommando wordt niet opgevolgd"
+        },
+        "hint": {
+          "en": "Triggers when the Tesla repeatedly does not follow the start/stop command (e.g. could_not_wake_buses) and the EMS backs off. Open the Tesla app once to fully wake the car.",
+          "nl": "Triggert als de Tesla het start/stop-commando herhaaldelijk niet opvolgt (bijv. could_not_wake_buses) en de EMS het minder vaak gaat proberen. Open één keer de Tesla-app om de auto volledig te wekken."
+        },
+        "tokens": [
+          {
+            "name": "error",
+            "type": "string",
+            "title": {
+              "en": "Error",
+              "nl": "Fout"
+            },
+            "example": {
+              "en": "could_not_wake_buses",
+              "nl": "could_not_wake_buses"
+            }
+          },
+          {
+            "name": "action",
+            "type": "string",
+            "title": {
+              "en": "Action",
+              "nl": "Actie"
+            },
+            "example": {
+              "en": "start",
+              "nl": "start"
+            }
+          }
+        ]
       }
     ],
     "conditions": [
@@ -1034,6 +1071,10 @@
     "setSchedulerMode": {
       "method": "POST",
       "path": "/setSchedulerMode"
+    },
+    "setSetting": {
+      "method": "POST",
+      "path": "/setSetting"
     },
     "wakeNow": {
       "method": "GET",
