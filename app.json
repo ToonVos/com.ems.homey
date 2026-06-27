@@ -129,24 +129,70 @@
       {
         "id": "dump_load_activated",
         "title": {
-          "en": "Dump load activated",
-          "nl": "Dumplast geactiveerd"
+          "en": "Dump load should turn on",
+          "nl": "Dumplast moet aan"
         },
         "hint": {
-          "en": "Triggers when all priority 1 and 2 devices are satisfied and surplus energy is available.",
-          "nl": "Triggert als alle prioriteit 1 en 2 verbruikers voldaan zijn en er nog overschot is."
-        }
+          "en": "Triggers when there is surplus energy to dump into a load. Use the 'Surplus' token to drive any device (boiler, heater, …) via your own Flow.",
+          "nl": "Triggert als er overschot is om in een dumplast te steken. Gebruik het 'Overschot'-token om er via je eigen Flow elk apparaat (boiler, verwarming, …) aan te koppelen."
+        },
+        "tokens": [
+          {
+            "name": "surplus_w",
+            "type": "number",
+            "title": {
+              "en": "Surplus (W)",
+              "nl": "Overschot (W)"
+            }
+          }
+        ]
       },
       {
         "id": "dump_load_deactivated",
         "title": {
-          "en": "Dump load deactivated",
-          "nl": "Dumplast gedeactiveerd"
+          "en": "Dump load should turn off",
+          "nl": "Dumplast moet uit"
         },
         "hint": {
-          "en": "Triggers when the solar surplus drops and dump loads are turned off.",
-          "nl": "Triggert als het zonne-overschot daalt en de dumplast wordt uitgeschakeld."
+          "en": "Triggers when the surplus drops and the dump load should be switched off. Wire this to turn your device off.",
+          "nl": "Triggert als het overschot daalt en de dumplast uit moet. Koppel dit aan het uitschakelen van je apparaat."
         }
+      },
+      {
+        "id": "battery_fallback",
+        "title": {
+          "en": "Battery control fallback",
+          "nl": "Batterij-aansturing fallback"
+        },
+        "hint": {
+          "en": "Triggers when the EMS could not directly control a battery (no controllable capability or a device error). Use the tokens to control the battery via your own Flow instead.",
+          "nl": "Triggert als de EMS een batterij niet direct kon aansturen (geen stuurbare capability of een device-fout). Gebruik de tokens om de batterij alsnog via je eigen Flow te schakelen."
+        },
+        "tokens": [
+          {
+            "name": "action",
+            "type": "string",
+            "title": { "en": "Action", "nl": "Actie" },
+            "example": { "en": "charge", "nl": "charge" }
+          },
+          {
+            "name": "enabled",
+            "type": "string",
+            "title": { "en": "On/off", "nl": "Aan/uit" },
+            "example": { "en": "aan", "nl": "aan" }
+          },
+          {
+            "name": "power_w",
+            "type": "number",
+            "title": { "en": "Power (W)", "nl": "Vermogen (W)" }
+          },
+          {
+            "name": "device",
+            "type": "string",
+            "title": { "en": "Device id", "nl": "Device-id" },
+            "example": { "en": "abc123", "nl": "abc123" }
+          }
+        ]
       },
       {
         "id": "ev_set_charge_current",

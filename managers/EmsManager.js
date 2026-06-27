@@ -339,7 +339,7 @@ class EmsManager {
         this.app.notifications?.send(`🔋 Accu reserve bereikt (${batKwh.toFixed(1)} kWh) — EV laadt verder op net`, 'battery');
       }
       if (this.evController) await this.evController.tick(state, slot);
-      this.homey.emit('ems:dumpLoadShouldActivate', false);
+      this.homey.emit('ems:dumpLoadShouldActivate', { active: false, surplusW: 0 });
       return;
     }
 
@@ -365,8 +365,12 @@ class EmsManager {
       await this.evController.tick(state, slot);
     }
 
-    // Dump load
-    this.homey.emit('ems:dumpLoadShouldActivate', slot.dumpLoad);
+    // Dump load — besluit + beschikbaar overschot (W) als flow-token, zodat de gebruiker
+    // er een willekeurig apparaat aan kan koppelen (boiler, verwarming) via een flow.
+    this.homey.emit('ems:dumpLoadShouldActivate', {
+      active:   !!slot.dumpLoad,
+      surplusW: Math.max(0, Math.round(state.surplusW ?? 0)),
+    });
   }
 
   async _realtimeFallback(state) {

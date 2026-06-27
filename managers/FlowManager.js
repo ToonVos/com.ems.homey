@@ -33,8 +33,29 @@ class FlowManager {
     this.homey.on('ems:prio1NotFeasible',     ()      => { trigger('prio1_not_feasible').trigger(); notify('⚠️ EMS: Dagplan krap — onvoldoende zon voor alle prioriteiten', 'plan'); });
     this.homey.on('ems:evReadyForDeparture',  data    => { trigger('ev_ready_for_departure').trigger(data); notify(`✅ EV klaar voor vertrek — ${data.soc?.toFixed(0) ?? '?'}% geladen`, 'ev'); });
     this.homey.on('ems:batteryBelowMinimum',  data    => { trigger('battery_below_minimum').trigger(data); notify(`🔋 Thuisaccu onder minimum — ${data.soc?.toFixed(0) ?? '?'}% SoC`, 'battery'); });
-    this.homey.on('ems:dumpLoadActivated',    ()      => trigger('dump_load_activated').trigger());
-    this.homey.on('ems:dumpLoadDeactivated',  ()      => trigger('dump_load_deactivated').trigger());
+    // Dumplast: de EMS besluit elke tick (ems:dumpLoadShouldActivate {active, surplusW})
+    // of er overschot is om in een dumplast te steken; de actiekaart 'set dump load' kan
+    // het overrulen (ems:dumpLoadOverride). We vuren de flow-trigger ALLEEN op een echte
+    // aan/uit-WISSEL (niet elke tick) met het beschikbare overschot als token, zodat de
+    // gebruiker er een willekeurig apparaat aan kan koppelen — ook zonder dumplast-device.
+    this._dumpActive = false;
+    const fireDump = (active, surplusW) => {
+      if (active === this._dumpActive) return;                 // alleen op wissel
+      this._dumpActive = active;
+      if (active) this._fire('dump_load_activated', { surplus_w: Math.max(0, Math.round(surplusW || 0)) });
+      else        this._fire('dump_load_deactivated', {});
+    };
+    this.homey.on('ems:dumpLoadShouldActivate', d  => fireDump(!!(d && d.active), d && d.surplusW));
+    this.homey.on('ems:dumpLoadOverride',       en => fireDump(!!en, 0));   // handmatige override-actiekaart
+    // Batterij-fallback: kon de EMS de batterij niet direct sturen (geen stuurbare cap of
+    // device-fout), dan vuurt deze trigger zodat de gebruiker de batterij via een eigen
+    // flow alsnog kan schakelen — algemeen bruikbaar voor elke batterij.
+    this.homey.on('ems:batteryFallback', d => this._fire('battery_fallback', {
+      action:  d?.action || '?',
+      enabled: d?.enabled ? 'aan' : 'uit',
+      power_w: Math.max(0, Math.round(d?.targetW || 0)),
+      device:  String(d?.id || '?'),
+    }));
     this.homey.on('ems:heatpumpModeChanged',  mode    => { trigger('heatpump_mode_switched').trigger({ mode }); notify(`🌡️ Warmtepomp omgeschakeld naar ${mode === 'cooling' ? 'koelen' : 'verwarmen'}`, 'heatpump'); });
     // Tesla aangekoppeld maar geen stroom op de kabel (laadpunt uit / rode kabel). Melding doet
     // de scheduler al; hier alleen de flow-trigger zodat de gebruiker eigen automatiseringen kan maken.
