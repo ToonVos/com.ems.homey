@@ -35,7 +35,7 @@ from graphify.report import generate
 from graphify.export import to_json
 
 # ── CONFIG: Homey-app-stack ──────────────────────────────────────────────────
-CODE_DIRS  = ["services", "managers", "drivers", "widgets"]   # app-code (AST)
+CODE_DIRS  = ["services", "managers", "drivers", "devices", "widgets"]   # app-code (AST)
 ROOT_FILES = ["app.js", "api.js"]                             # root-level app-code
 TEST_DIRS  = ["tools"]                                        # test-/diag-scripts (AST)
 CODE_EXTS  = (".js",)
@@ -109,7 +109,7 @@ def datamodel_extract():
 # ── 4. WIRING: ems:-event-bus + flow-kaarten (de brug code<->flow) ───────────
 EMIT_RE = re.compile(r"""\.emit\(\s*['"]ems:(\w+)['"]""")
 ON_RE   = re.compile(r"""\.on\(\s*['"]ems:(\w+)['"]""")
-TRIG_RE = re.compile(r"""trigger\(\s*['"]([a-z0-9_]+)['"]""")
+TRIG_RE = re.compile(r"""(?:trigger|_fire)\(\s*['"]([a-z0-9_]+)['"]""")
 ONLOC_RE = re.compile(r"""\.on\(\s*['"]ems:(\w+)['"]""")
 
 def wiring_extract(js_files):

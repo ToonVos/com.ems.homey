@@ -31,21 +31,21 @@ if tool == "Bash":
     relevant = bool(re.search(r"\b(grep|rg|ripgrep|ag|ack|fd|find)\b", str(ti.get("command", ""))))
 else:  # Read | Glob
     s = (str(ti.get("file_path") or "") + " " + str(ti.get("pattern") or "") + " " + str(ti.get("path") or "")).lower().replace("\\", "/")
-    relevant = ("graphify-out/" not in s) and any(e in s for e in (".ts", ".tsx", ".prisma", ".wasp"))
+    relevant = ("graphify-out/" not in s) and any(e in s for e in (".js", ".md", "app.json"))
 if not relevant:
     sys.exit(0)
 
 # Stale? (mtime: bron nieuwer dan graph) — zelfde signaal als refresh.sh
 gmt = os.path.getmtime(graph)
 stale = False
-for base in ("app/src", "app/schema.prisma", "app/main.wasp", "e2e-tests"):
+for base in ("services", "managers", "drivers", "devices", "widgets", "tools", "docs", "app.js", "api.js", "app.json"):
     if stale:
         break
     if os.path.isfile(base):
         stale = os.path.getmtime(base) > gmt
     else:
         for root, _dirs, files in os.walk(base):
-            if any(f.endswith((".ts", ".tsx", ".prisma", ".wasp")) and os.path.getmtime(os.path.join(root, f)) > gmt for f in files):
+            if any(f.endswith((".js", ".md", ".json")) and os.path.getmtime(os.path.join(root, f)) > gmt for f in files):
                 stale = True
                 break
 
@@ -54,10 +54,11 @@ if stale:
            "(bron gewijzigd). Voor deze actie: lees code direct of accepteer net-oude graph-data; "
            "volgende keer is hij vers.")
 else:
-    msg = ("Tip: er is een verse code-graph (graphify-out/graph.json — 4 bronnen: app/src+e2e+prisma+wasp, "
-           "code⇄datamodel⇄operations). Voor architectuur/samenhang-vragen (wie roept wat, welke operations "
-           "raken entity X, impact-analyse) is een gerichte query op graph.json sneller dan grep. "
-           "Voor code-logica/edits gewoon lezen.")
+    msg = ("Tip: er is een verse code-graph (graphify-out/graph.json — bronnen: JS-code "
+           "(services/managers/drivers/devices/widgets) + device-model (app.json) + flow-wiring "
+           "(ems:-events→flow-kaarten) + docs). Voor architectuur/samenhang-vragen (wie roept wat, "
+           "welke code voedt flow-kaart X, impact, doc-rot) is een gerichte query op graph.json "
+           "sneller dan grep. Voor code-logica/edits gewoon lezen.")
 print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": msg}}))
 PY
 exit 0

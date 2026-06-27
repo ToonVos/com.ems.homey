@@ -45,7 +45,7 @@ need=0
 if [ ! -f "$GRAPH" ]; then
   need=1
 else
-  newer="$(find services managers drivers widgets tools docs app.js api.js app.json \
+  newer="$(find services managers drivers devices widgets tools docs app.js api.js app.json \
             \( -name '*.js' -o -name '*.md' -o -name 'app.json' \) \
             -newer "$GRAPH" -print -quit 2>/dev/null || true)"
   [ -n "$newer" ] && need=1
