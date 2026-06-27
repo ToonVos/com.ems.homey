@@ -3,3 +3,8 @@
 .git
 node_modules
 .homeybuild
+scripts/graphify
+graphify-out
+*.py
+*.pyc
+__pycache__

@@ -4,3 +4,8 @@ node_modules/
 *.log
 .DS_Store
 .env
+
+# graphify (lokale code-graph; elke checkout bouwt gratis lokaal — nooit committen)
+graphify-out/
+__pycache__/
+*.pyc
