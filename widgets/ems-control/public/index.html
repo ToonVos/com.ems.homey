@@ -92,6 +92,17 @@
     }
     .pr-date { font-size: 9px; opacity: .45; text-align: right; white-space: nowrap; }
 
+    /* ── Statusregel (huidige status, afwijkend van planningsregels) ── */
+    .srow {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 11px; margin-bottom: 9px;
+      border-radius: 10px;
+    }
+    .sr-dot    { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+    .sr-info   { min-width: 0; flex: 1; }
+    .sr-status { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sr-sub    { font-size: 10px; opacity: .6; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
     /* ── Scheidingslijn ── */
     .divider { height: 0.5px; background: rgba(128,128,128,.15); margin: 6px 0 10px; }
 
@@ -303,6 +314,19 @@
       const target = sc.target_pct ?? 90;
       const windows = sc.plan_windows || [];
 
+      // Statusregel = altijd de eerste rij: de huidige toestand (laadt/wacht/…).
+      // Bewust afwijkend van de planningsregels: kaart-vorm met tint, géén kosten,
+      // géén van→tot-bolletje en géén datum/"nu" — dat is alleen voor de planning.
+      function makeStatusRow(dotColor, bg, textColor, statusStr, subStr) {
+        return `<div class="srow" style="background:${bg}">
+          <div class="sr-dot" style="background:${dotColor}"></div>
+          <div class="sr-info">
+            <div class="sr-status" style="color:${textColor}">${statusStr}</div>
+            ${subStr ? `<div class="sr-sub">${subStr}</div>` : ''}
+          </div>
+        </div>`;
+      }
+
       function makeRow(accent, timeStr, subStr, costStr, bubbleHtml, bubbleBg, bubbleColor, dateStr) {
         return `<div class="prow">
           <div class="pr-accent" style="background:${accent}"></div>
@@ -320,37 +344,56 @@
         </div>`;
       }
 
+      // Kleurcodering statusregel — 3 tonen:
+      //   GROEN  = actief laden (goed bezig)
+      //   AMBER  = aandacht nodig (afgekoppeld of wil-laden-maar-laadt-niet)
+      //   GRIJS  = passief/neutraal (wacht, opstart, spaarstand, plan-berekening)
+      const ST_GREEN = ['#1D9E75', 'rgba(29,158,117,.12)', '#5DCAA5'];
+      const ST_AMBER = ['#E0A100', 'rgba(224,161,0,.12)', '#E0A100'];
+      const ST_GRAY  = ['rgba(128,128,128,.5)', 'rgba(128,128,128,.08)', 'rgba(128,128,128,.75)'];
+
       if (s?.far_deadline) {
-        rows.push(makeRow('rgba(128,128,128,.3)', '🍃 Spaarstand', `doel ${target}% gepland voor vertrek`, '', `${soc ?? '–'}%`, 'rgba(128,128,128,.12)', 'rgba(128,128,128,.6)', ''));
-      } else {
-        // Status-rij bovenaan (alleen als aangekoppeld)
-        if (sc.connected) {
-          const priceNow = sc.current_price_eur != null ? `€${Number(sc.current_price_eur).toFixed(3)}/kWh` : '';
-          const bubble = `${soc ?? '?'}→<br>${target}%`;
-          if (sc.charging_actual === true) {
-            // De auto laadt ÉCHT (Tesla-boolean charging_on/charging_state), niet alleen 'wil'.
-            const costNow = sc.kwh_needed > 0 && sc.current_price_eur != null
-              ? `~€${Math.round(sc.kwh_needed * sc.current_price_eur)}` : '';
-            rows.push(makeRow('#1D9E75', 'Nu · laadt', priceNow, costNow, bubble, 'rgba(29,158,117,.15)', '#5DCAA5', 'nu'));
-          } else if (sc.charge_now) {
-            // We WILLEN laden maar de auto laadt (nog) niet. Toon de echte reden i.p.v. 'laadt'.
-            const probleem = sc.no_power || (sc.drive_error && sc.drive_error !== 'null')
-                          || (sc.car_limit != null && sc.car_limit < target);
-            if (probleem) {
-              const r = [];
-              if (sc.no_power) r.push('geen stroom op kabel — laadpunt aan?');
-              else if (sc.drive_error === 'could_not_wake_buses') r.push('auto-bus slaapt — opnieuw proberen');
-              else if (sc.drive_error && sc.drive_error !== 'null') r.push('auto-fout: ' + sc.drive_error);
-              if (sc.car_limit != null && sc.car_limit < target) r.push(`auto-laadlimiet ${sc.car_limit}%`);
-              rows.push(makeRow('#E0A100', '⚠ Wil laden — auto laadt niet', r.join(' · '), '', bubble, 'rgba(224,161,0,.13)', '#E0A100', 'nu'));
-            } else {
-              // Geen concreet probleem → waarschijnlijk opstart-lag (Tesla-poll ~1 min).
-              rows.push(makeRow('rgba(128,128,128,.35)', 'Laden starten…', priceNow, '', bubble, 'rgba(128,128,128,.12)', 'rgba(128,128,128,.6)', 'nu'));
-            }
-          } else {
-            rows.push(makeRow('rgba(128,128,128,.25)', 'Wacht op goedkoop uur', priceNow ? `nu ${priceNow} · te duur` : '', '', `${soc ?? '–'}%`, 'rgba(128,128,128,.1)', 'rgba(128,128,128,.5)', 'nu'));
-          }
+        rows.push(makeStatusRow(...ST_GRAY, '🍃 Spaarstand', `doel ${target}% gepland voor vertrek`));
+      } else if (!sc.connected) {
+        // Afgekoppeld. Twee gevallen:
+        //  • accu al ≥ doel → niets te laden, aansluiten niet nodig → GRIJS (neutraal).
+        //  • accu < doel    → "koppel aan vóór …" oproep als statusregel → AMBER (actie).
+        const needCharge = (soc != null && target != null) ? soc < target : true;
+        if (needCharge) {
+          const fw = windows[0];
+          const sub = fw
+            ? `koppel vóór ${shortDate(fw.from_local)} ${shortWhen(fw.from_local)} aan om dit plan te halen`
+            : 'koppel aan om te laden';
+          rows.push(makeStatusRow(...ST_AMBER, 'Afgekoppeld', sub));
+        } else {
+          rows.push(makeStatusRow(...ST_GRAY, 'Afgekoppeld', `al op doel (${target}%) — aansluiten niet nodig`));
         }
+      } else {
+        // Aangekoppeld: huidige laadtoestand.
+        if (sc.charging_actual === true) {
+          // De auto laadt ÉCHT (Tesla-boolean charging_on/charging_state), niet alleen 'wil'.
+          rows.push(makeStatusRow(...ST_GREEN, 'Laadt', ''));
+        } else if (sc.charge_now) {
+          // We WILLEN laden maar de auto laadt (nog) niet. Toon de echte reden i.p.v. 'laadt'.
+          const probleem = sc.no_power || (sc.drive_error && sc.drive_error !== 'null')
+                        || (sc.car_limit != null && sc.car_limit < target);
+          if (probleem) {
+            const r = [];
+            if (sc.no_power) r.push('geen stroom op kabel — laadpunt aan?');
+            else if (sc.drive_error === 'could_not_wake_buses') r.push('auto-bus slaapt — opnieuw proberen');
+            else if (sc.drive_error && sc.drive_error !== 'null') r.push('auto-fout: ' + sc.drive_error);
+            if (sc.car_limit != null && sc.car_limit < target) r.push(`auto-laadlimiet ${sc.car_limit}%`);
+            rows.push(makeStatusRow(...ST_AMBER, '⚠ Wil laden — auto laadt niet', r.join(' · ')));
+          } else {
+            // Geen concreet probleem → waarschijnlijk opstart-lag (Tesla-poll ~1 min).
+            rows.push(makeStatusRow(...ST_GRAY, 'Laden starten…', ''));
+          }
+        } else {
+          rows.push(makeStatusRow(...ST_GRAY, 'Wacht op goedkoop uur', 'te duur'));
+        }
+      }
+
+      if (!s?.far_deadline) {
 
         // Laadvensters (groen = verplicht, blauw = opportunistisch)
         // Filter vensters zonder netto SoC-bijdrage (artefact van overlappende banden)
@@ -375,30 +418,15 @@
           const w = windows[0];
           const accent = w.type === 'mand' ? '#1D9E75' : '#378ADD';
           rows.push(makeRow(accent, `${shortWhen(w.from_local)} – ${shortWhen(w.to_local)}`, `klaar op ${target}%`, '', `${target}%`, 'rgba(128,128,128,.1)', 'rgba(128,128,128,.5)', shortDate(w.from_local)));
-        } else if (!sc.connected) {
-          // Disconnected, nog geen plan berekend
-          rows.push(makeRow('rgba(128,128,128,.2)', 'Plan wordt berekend…', '', '', `${soc ?? '–'}%`, 'rgba(128,128,128,.08)', 'rgba(128,128,128,.4)', ''));
         }
+        // Afgekoppeld zonder plan: de "Afgekoppeld"-statusregel hierboven dekt dit al.
       }
 
       el.innerHTML = rows.join('');
 
-      // Hint banner bij afgekoppeld
+      // De vroegere losse "koppel aan"-banner zit nu in de Afgekoppeld-statusregel.
       const hint = document.getElementById('connHint');
-      const firstWin = windows[0];
-      if (!sc.connected && firstWin) {
-        const hintTxt = `ⓘ koppel vóór ${shortDate(firstWin.from_local)} ${shortWhen(firstWin.from_local)} aan om dit plan te halen`;
-        if (!hint) {
-          const h = document.createElement('div');
-          h.id = 'connHint'; h.className = 'hint';
-          h.innerHTML = hintTxt;
-          el.after(h);
-        } else {
-          hint.innerHTML = hintTxt;
-        }
-      } else if (hint) {
-        hint.remove();
-      }
+      if (hint) hint.remove();
     }
 
     // Voer een render-stap uit; een fout in één sectie mag de rest niet slopen.
