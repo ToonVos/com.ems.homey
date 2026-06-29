@@ -594,8 +594,16 @@ class TeslaScheduler {
       const holdDeadlineMs = this._pluggedSince
         ? Math.min(this._pluggedSince + holdHorizonMs0, dlMs)
         : Math.min(now + holdHorizonMs0, dlMs);
+      // Fase 0 alleen als zijn rust-deadline STRAKKER is dan de hoofddeadline. Vallen ze
+      // samen (plug+24u ≥ deadline), dan voegt een aparte 55%-reservering niets toe maar
+      // fragmenteert ze het plan: Fase 0 kiest een aaneengesloten blok, de hoofdvulling
+      // kiest dáárna aaneengesloten over de RESTERENDE slots (blind voor Fase 0's positie)
+      // → de unie krijgt een gat midden in een uur (gezien: 14:15 overgeslagen terwijl
+      // 14:00/14:30/14:45 even duur wél gekozen werden). Eén gecombineerde hoofdvulling
+      // (reservedKwh=0) laadt soc→doel dan in één doorlopend blok.
+      const holdTighter = holdDeadlineMs < dlMs - SLOT_MIN * 60_000;
       let reservedKwh = 0;   // wat Fase 0 al dekt — niet nóg eens door de hoofdvulling
-      if (soc < vacationSoc && holdDeadlineMs > now) {
+      if (soc < vacationSoc && holdDeadlineMs > now && holdTighter) {
         const kwhHold0 = (vacationSoc - soc) / 100 * cap / EFFICIENCY;
         const holdWin0 = within.filter(h => h.t < holdDeadlineMs);
         if (holdWin0.length > 0) {
