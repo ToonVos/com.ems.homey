@@ -638,7 +638,12 @@ class TeslaScheduler {
       const fromOpp   = Math.max(soc, mandatory);
       const need2     = (!oppLocked && soc < ceiling)
         ? Math.max(0, (ceiling - fromOpp) / 100 * cap) / EFFICIENCY : 0;
-      const oppSet    = this._pickCheapest(fullWin, need2, slotKwh, mandSet).set;
+      // AANEENGESLOTEN-bewust (net als de verplichte vulling en Fase 0): met
+      // _pickCheapest greep de opp-tak losse goedkoopste kwartiertjes en liet bij
+      // vlakke (uur)prijzen een gat vallen → twee laadbeurten waar één had gemoeten.
+      // _pickContiguousOptimal weegt n_runs × C_session, dus splitst alléén als de
+      // energie-besparing de extra sessie-/wake-kost overtreft.
+      const oppSet    = this._pickContiguousOptimal(fullWin, need2, slotKwh, mandSet, sessionEur).set;
 
       kwhNeeded = (soc < mandatory ? (mandatory - soc) / 100 * cap / EFFICIENCY : 0) + need2;
       selectedCount = mandSet.size + oppSet.size;
@@ -684,7 +689,11 @@ class TeslaScheduler {
           const kWh = w._slots.length * slotKwh;
           const deltaSoc = kWh * EFFICIENCY / cap * 100;
           const fromSoc = Math.round(runSoc);
-          const toSoc   = Math.min(Math.round(runSoc + deltaSoc), mandatory);
+          // Aftoppen op het plafond, niet op het doel: opportunistische vensters
+          // laden legitiem boven mandatory richting ceiling (≤85%). Met de oude
+          // mandatory-cap werd to_pct teruggeknepen tot doel → venster leek no-op
+          // en de widget toonde target% i.p.v. de echte from→to richting plafond.
+          const toSoc   = Math.min(Math.round(runSoc + deltaSoc), ceiling);
           runSoc = toSoc;
           return {
             from_local: this.app.localTime(new Date(w._slots[0].t)),
