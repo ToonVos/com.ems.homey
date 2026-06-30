@@ -388,6 +388,11 @@
             // Geen concreet probleem → waarschijnlijk opstart-lag (Tesla-poll ~1 min).
             rows.push(makeStatusRow(...ST_GRAY, 'Laden starten…', ''));
           }
+        } else if (sc.kwh_needed != null && sc.kwh_needed <= 0) {
+          // Niets meer te laden (doel én plafond gehaald) → klaar, geen "wachten".
+          // Grijs (niets te doen), niet groen — groen is voorbehouden aan actief laden.
+          const dl = shortDate(sc.deadline_local);
+          rows.push(makeStatusRow(...ST_GRAY, 'Op doel — gereed', dl ? `klaar voor ${dl}` : 'klaar voor vertrek'));
         } else {
           rows.push(makeStatusRow(...ST_GRAY, 'Wacht op goedkoop uur', 'te duur'));
         }
