@@ -1,0 +1,31 @@
+{
+  "name": {
+    "en": "EMS Energy Flows",
+    "nl": "EMS Energiestromen"
+  },
+  "height": 300,
+  "settings": [
+    {
+      "id": "rows",
+      "type": "text",
+      "title": { "en": "Rows (comma-separated, in order)", "nl": "Rijen (komma-gescheiden, in volgorde)" },
+      "hint": {
+        "en": "Choose from: pv, ev, accu, huis, wp, boiler",
+        "nl": "Kies uit: pv (PV-bestemming), ev (herkomst EV), accu (herkomst accu), huis (voeding huis), wp (warmtepomp), boiler. Volgorde = weergavevolgorde."
+      },
+      "value": "pv,ev,accu,huis"
+    },
+    {
+      "id": "show_kwh",
+      "type": "checkbox",
+      "title": { "en": "Show kWh labels", "nl": "Toon kWh-labels" },
+      "value": true
+    }
+  ],
+  "api": {
+    "getMix": {
+      "method": "GET",
+      "path": "/getMix"
+    }
+  }
+}

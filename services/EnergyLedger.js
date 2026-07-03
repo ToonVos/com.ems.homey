@@ -58,8 +58,78 @@ class EnergyLedger {
       import_cost_eur: 0, export_value_eur: 0, avoided_import_eur: 0,
       tick_import_kwh: 0, tick_export_kwh: 0, tick_consumption_kwh: 0,
       solar_export_kwh: 0, trade_export_kwh: 0,
+      // v5.13 bron-attributie (kWh, per tick opgebouwd): waar ging de PV heen,
+      // en waar kwam de stroom voor EV/huis/wp/boiler vandaan (zon direct /
+      // zon via accu / net via accu / net). Zie _attribute().
+      mix: {
+        pv_house: 0, pv_hp: 0, pv_ev: 0, pv_bat: 0, pv_boiler: 0,
+        bat_in_sun: 0, bat_in_grid: 0,
+        ev_pv: 0, ev_bat_sun: 0, ev_bat_grid: 0, ev_grid: 0,
+        house_pv: 0, house_bat_sun: 0, house_bat_grid: 0, house_grid: 0,
+        hp_pv: 0, hp_bat_sun: 0, hp_bat_grid: 0, hp_grid: 0,
+        boiler_pv: 0, boiler_bat_sun: 0, boiler_bat_grid: 0, boiler_grid: 0,
+        hp_kwh: 0, boiler_kwh: 0,
+      },
       ticks: 0,
     };
+  }
+
+  /**
+   * Bron-attributie per tick (v5.13, tegel "EMS Energie").
+   * Prioriteit PV → huis → warmtepomp → EV → accu → boiler (overloop) → export.
+   * De accu heeft een persistente inhoud-mix (settings `bat_mix`: zon-/net-kWh):
+   * bij laden apart ingeboekt, bij ontladen naar rato eruit — zo weten we of
+   * "stroom uit de accu" oorspronkelijk zon of gekochte netstroom was.
+   * Niet-PV-vraag wordt eerst uit de accu-ontlading gedekt (huis → wp → EV →
+   * boiler), de rest komt van het net. Alles in kWh van deze tick.
+   */
+  _attribute(d, state, dtH) {
+    const kwh = (w) => Math.max(0, w) * dtH / 1000;
+    const pvK     = kwh(state.pvW ?? 0);
+    const evK     = kwh(state.evW ?? 0);
+    const hpK     = kwh(state.hpW ?? 0);
+    const boilK   = kwh(state.boilerW ?? 0);
+    const batInK  = kwh(state.batPowerW ?? 0);
+    const batOutK = kwh(-(state.batPowerW ?? 0));
+    // huis = sluitende rest van de balans (kan door meet-jitter licht negatief zijn → 0)
+    const houseK = Math.max(0, pvK + ((state.gridW ?? 0) * dtH / 1000) - batInK + batOutK - evK - hpK - boilK);
+
+    const m = d.mix;
+    m.hp_kwh += hpK; m.boiler_kwh += boilK;
+
+    // 1. PV verdelen
+    let pvLeft = pvK;
+    const takePv = (need) => { const t = Math.min(pvLeft, need); pvLeft -= t; return t; };
+    const pvHouse = takePv(houseK), pvHp = takePv(hpK), pvEv = takePv(evK),
+          pvBat = takePv(batInK), pvBoil = takePv(boilK);
+    m.pv_house += pvHouse; m.pv_hp += pvHp; m.pv_ev += pvEv; m.pv_bat += pvBat; m.pv_boiler += pvBoil;
+
+    // 2. Accu-inhoud-mix bijwerken (persistent over dagen heen)
+    const bm = this.homey.settings.get('bat_mix') || { sun: 0, grid: 0 };
+    bm.sun += pvBat; bm.grid += Math.max(0, batInK - pvBat);
+    m.bat_in_sun += pvBat; m.bat_in_grid += Math.max(0, batInK - pvBat);
+    const bmTot = bm.sun + bm.grid;
+    const sunShare = bmTot > 0 ? bm.sun / bmTot : 0;
+    if (batOutK > 0) {
+      bm.sun = Math.max(0, bm.sun - batOutK * sunShare);
+      bm.grid = Math.max(0, bm.grid - batOutK * (1 - sunShare));
+    }
+    this.homey.settings.set('bat_mix', { sun: +bm.sun.toFixed(3), grid: +bm.grid.toFixed(3) });
+
+    // 3. Niet-PV-vraag dekken: eerst accu-ontlading (huis → wp → EV → boiler), rest net
+    let batLeft = batOutK;
+    const cover = (need) => {
+      const fromBat = Math.min(batLeft, need); batLeft -= fromBat;
+      return { batSun: fromBat * sunShare, batGrid: fromBat * (1 - sunShare), grid: need - fromBat };
+    };
+    const ch = cover(houseK - pvHouse);
+    m.house_pv += pvHouse; m.house_bat_sun += ch.batSun; m.house_bat_grid += ch.batGrid; m.house_grid += ch.grid;
+    const cp = cover(hpK - pvHp);
+    m.hp_pv += pvHp; m.hp_bat_sun += cp.batSun; m.hp_bat_grid += cp.batGrid; m.hp_grid += cp.grid;
+    const ce = cover(evK - pvEv);
+    m.ev_pv += pvEv; m.ev_bat_sun += ce.batSun; m.ev_bat_grid += ce.batGrid; m.ev_grid += ce.grid;
+    const cb = cover(boilK - pvBoil);
+    m.boiler_pv += pvBoil; m.boiler_bat_sun += cb.batSun; m.boiler_bat_grid += cb.batGrid; m.boiler_grid += cb.grid;
   }
 
   _loadOrNewDay() {
@@ -69,6 +139,7 @@ class EnergyLedger {
     if (saved && saved.date === today) {
       const merged = { ...fresh, ...saved };
       for (const k of Object.keys(fresh)) if (merged[k] == null && typeof fresh[k] === 'number') merged[k] = fresh[k];
+      merged.mix = { ...fresh.mix, ...(saved.mix || {}) };   // nieuwe mix-velden na een update
       return merged;
     }
     return fresh;
@@ -152,6 +223,9 @@ class EnergyLedger {
         const selfKwh = Math.max(0, consW - Math.max(0, gridW)) * dtH / 1000;
         d.avoided_import_eur += selfKwh * (price.import_eur ?? 0);
       }
+      // v5.13: bron-attributie (PV-bestemming + herkomst EV/huis/wp/boiler + accu-mix)
+      this._attribute(d, state, dtH);
+
       d.ticks++;
       this.homey.settings.set(SAVE_KEY, d);
     } catch (e) { this.app.error('[Ledger] accumulate:', e.message); }
@@ -213,6 +287,14 @@ class EnergyLedger {
       battery_soc: snap.battery_soc,
       battery_rte_pct: snap.battery_rte_pct,
       solar_forecast_tomorrow_kwh: snap.solar_forecast_tomorrow_kwh,
+      // v5.13: bron-attributie voor de "EMS Energie"-tegel + huidige accu-mix
+      mix: d.mix || null,
+      bat_mix: (() => {
+        const bm = this.homey.settings.get('bat_mix') || null;
+        if (!bm) return null;
+        const tot = (bm.sun || 0) + (bm.grid || 0);
+        return { ...bm, sun_pct: tot > 0 ? +(100 * bm.sun / tot).toFixed(0) : null };
+      })(),
       ticks: d.ticks,
     };
   }

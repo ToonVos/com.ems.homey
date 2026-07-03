@@ -222,17 +222,24 @@ class EmsManager {
     this._observer = this.homey.setInterval(async () => {
       if (this._loop) return;   // echte EMS-lus actief → die boekt al
       try {
-        const [pvW, gridW, batW] = await Promise.all([
+        // Warmtepomp/boiler zijn optioneel: alleen gelezen als de gebruiker ze in
+        // `decisionlog_devices` mapt (keys 'heatpump'/'boiler', géén fallback) —
+        // dan vallen ze in de attributie automatisch uit "huis" (restverbruik).
+        const hpId = devId('heatpump'), boilerId = devId('boiler');
+        const [pvW, gridW, batW, hpW, boilerW] = await Promise.all([
           cap(devId('pv'), 'measure_power'),
           cap(devId('p1'), 'measure_power'),
           cap(devId('nexus'), 'measure_power'),
+          hpId ? cap(hpId, 'measure_power') : null,
+          boilerId ? cap(boilerId, 'measure_power') : null,
         ]);
         // EV-vermogen: alleen tellen als de Tesla-boolean zegt dat er geladen wordt
         // (de vermogensmeting kan stale zijn — les 2026-06-10).
         const sc = this.app.teslaScheduler?.getStatus?.() || null;
         const evW = (sc && sc.charging_actual === true && typeof sc.charge_power_kw === 'number')
           ? sc.charge_power_kw * 1000 : 0;
-        const state = { pvW: pvW ?? 0, gridW: gridW ?? 0, batPowerW: batW ?? 0, evW };
+        const state = { pvW: pvW ?? 0, gridW: gridW ?? 0, batPowerW: batW ?? 0, evW,
+                        hpW: hpW ?? 0, boilerW: boilerW ?? 0 };
         this._recordActuals(state);
         await this.energyLedger.accumulate(state);
         await this._updateConsumptionHistory(state);

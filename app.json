@@ -172,25 +172,46 @@
           {
             "name": "action",
             "type": "string",
-            "title": { "en": "Action", "nl": "Actie" },
-            "example": { "en": "charge", "nl": "charge" }
+            "title": {
+              "en": "Action",
+              "nl": "Actie"
+            },
+            "example": {
+              "en": "charge",
+              "nl": "charge"
+            }
           },
           {
             "name": "enabled",
             "type": "string",
-            "title": { "en": "On/off", "nl": "Aan/uit" },
-            "example": { "en": "aan", "nl": "aan" }
+            "title": {
+              "en": "On/off",
+              "nl": "Aan/uit"
+            },
+            "example": {
+              "en": "aan",
+              "nl": "aan"
+            }
           },
           {
             "name": "power_w",
             "type": "number",
-            "title": { "en": "Power (W)", "nl": "Vermogen (W)" }
+            "title": {
+              "en": "Power (W)",
+              "nl": "Vermogen (W)"
+            }
           },
           {
             "name": "device",
             "type": "string",
-            "title": { "en": "Device id", "nl": "Device-id" },
-            "example": { "en": "abc123", "nl": "abc123" }
+            "title": {
+              "en": "Device id",
+              "nl": "Device-id"
+            },
+            "example": {
+              "en": "abc123",
+              "nl": "abc123"
+            }
           }
         ]
       },
@@ -1031,6 +1052,44 @@
           "path": "/clearOverride"
         }
       }
+    },
+    "ems-energy": {
+      "name": {
+        "en": "EMS Energy Flows",
+        "nl": "EMS Energiestromen"
+      },
+      "height": 300,
+      "settings": [
+        {
+          "id": "rows",
+          "type": "text",
+          "title": {
+            "en": "Rows (comma-separated, in order)",
+            "nl": "Rijen (komma-gescheiden, in volgorde)"
+          },
+          "hint": {
+            "en": "Choose from: pv, ev, accu, huis, wp, boiler",
+            "nl": "Kies uit: pv (PV-bestemming), ev (herkomst EV), accu (herkomst accu), huis (voeding huis), wp (warmtepomp), boiler. Volgorde = weergavevolgorde."
+          },
+          "value": "pv,ev,accu,huis"
+        },
+        {
+          "id": "show_kwh",
+          "type": "checkbox",
+          "title": {
+            "en": "Show kWh labels",
+            "nl": "Toon kWh-labels"
+          },
+          "value": true
+        }
+      ],
+      "api": {
+        "getMix": {
+          "method": "GET",
+          "path": "/getMix"
+        }
+      },
+      "id": "ems-energy"
     }
   },
   "api": {
