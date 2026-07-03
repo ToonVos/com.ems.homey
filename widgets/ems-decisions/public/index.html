@@ -22,7 +22,7 @@
 <body>
 <div id="wrap"><div class="empty">Laden…</div></div>
 <div class="legend" id="legend"></div>
-<div id="reason">Tik op de tijdlijn voor de reden van dat moment.</div>
+<div id="reason"></div>
 
 <script>
 let Homey = null;
@@ -97,17 +97,15 @@ function onHomeyReady(_Homey) {
       [['laden', '#2ecc71'], ['rust', '#8fbf6a'], ['wachten', '#4a90d9'], ['panic', '#e74c3c'], ['prijs', '#4a90d9'], ['gepland ▔', '#2ecc71'], ['• wake', '#e67e22']]
         .map(([n, c]) => `<span><i style="background:${c}"></i>${n}</span>`).join('');
 
-    document.getElementById('tl').addEventListener('click', (ev) => {
-      const r = ev.target.closest('rect[data-i]');
-      if (!r) return;
-      const t = ticks[+r.dataset.i];
-      const tm = new Date(t.ts).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
+    // Laatste beslissing als vaste regel onderin (tik-op-tijdlijn was op een
+    // kleine widget onbruikbaar — verwijderd op gebruikersverzoek).
+    const last = ticks[ticks.length - 1];
+    if (last) {
+      const tm = new Date(last.ts).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
       document.getElementById('reason').innerHTML =
-        `<b>${tm} — ${NAMES[t.decision] || t.decision}</b>` +
-        `${t.soc != null ? ` · SoC ${t.soc}%` : ''}${t.price != null ? ` · €${t.price.toFixed(3)}` : ''}` +
-        `${t.commanded ? ` · cmd: ${t.commanded}` : ''}<br>${t.reason}`;
-      Homey.setHeight(document.body.scrollHeight + 8);
-    });
+        `<b>${tm} — ${NAMES[last.decision] || last.decision}</b>` +
+        `${last.soc != null ? ` · SoC ${last.soc}%` : ''}${last.price != null ? ` · €${last.price.toFixed(3)}` : ''}<br>${last.reason}`;
+    }
     Homey.setHeight(document.body.scrollHeight + 8);
   }
 
