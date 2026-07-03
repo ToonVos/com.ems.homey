@@ -36,10 +36,14 @@ Elke module = eigen feature-branch, PR-baar naar upstream. Status per 2026-06-08
 | `feat/m19-combi-postsaldering` | Gecombineerde post-saldering-modus (prijs + overschot) | ✅ |
 | `feat/m20-notification-categories` | Tijdlijn-meldingen per categorie instelbaar + ontdubbeling | ✅ |
 | (fixes) | Laadlimiet-als-stop, reconcile + wake-bewust (could_not_wake_buses), widget auto-hoogte (`setHeight`) | ✅ |
+| (2026-07-03) | Observe-only meetlaag `startObserver()` — actuals/ledger/nachtload zónder EMS Controller-device, stale-Nexus-balanscorrectie, rollende 7d-nachtload | ✅ |
+| (2026-07-03) | Bron-attributie in EnergyLedger (`_attribute` + persistente accu-mix `bat_mix`) — PV-bestemming, herkomst EV/huis/wp/boiler | ✅ |
+| (2026-07-03) | Vijf dashboardtegels: `ems-energy`, `ems-curve` (+vandaag/week/maand-totalen), `ems-decisions`, `ems-why`, `ems-savings` (licht+donker) | ✅ |
+| (2026-07-03) | Levende §6.2-deficit-drempel (`getTeslaDeficitThresholdPct`, in beslis-JSONL), chunk-endpoint `getUserdataFile?start=&length=`, JSONL-retentie, `_setLimit()`-consolidatie + limiet-flow-watchdog, O(n·N)-slotkeuze + unit-tests (`npm test`) | ✅ |
 
 Module 1 (autonome batterij) en de Tesla-sturing zonder Wall Connector zijn **blockers** om de app in deze setup te laten draaien; de prijs-stack (m8–m17) is de onderscheidende regie. Volledige beschrijving: [`docs/EMS-TESLA-PRICE-CHARGING.md`](docs/EMS-TESLA-PRICE-CHARGING.md).
 
-**Nog open (voorraad):** herkomst-tracking (pv_share), accu-veroudering geprijsd + `optimalChargeCap`, datum/weken-vooruit ritplanning + vakantie-hold, post-2027 Nexus-dump-vóór-zonsopgang.
+**Nog open (voorraad):** ~~herkomst-tracking (pv_share)~~ → gedaan 2026-07-03 (bron-attributie), accu-veroudering geprijsd + `optimalChargeCap`, datum/weken-vooruit ritplanning + vakantie-hold, post-2027 Nexus-dump-vóór-zonsopgang.
 
 ## Afspraken
 
