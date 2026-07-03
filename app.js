@@ -299,6 +299,10 @@ class EmsApp extends Homey.App {
     this.teslaScheduler = new TeslaScheduler(this);
     await this.teslaScheduler.init();
 
+    // v5.13: observe-only meetlaag (actuals/ledger/nachtload) — draait ook
+    // zonder EMS Controller-device; doet niets zodra de echte lus actief is.
+    this.ems.startObserver?.();
+
     this.log('  Home EMS ready.');
     this.log('═══════════════════════════════════');
   }

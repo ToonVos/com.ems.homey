@@ -196,6 +196,59 @@ class EmsManager {
     };
   }
 
+  /**
+   * OBSERVE-ONLY sampler (v5.13): draait de meetlaag zónder de stuurlus.
+   * De actuals (10-min curves), EnergyLedger-accumulatie en de nacht-baseload-
+   * meting leefden allemaal in _tick(), die alleen start als het EMS Controller-
+   * device is toegevoegd — bij een Tesla-only-installatie draaide er dus NIETS
+   * van de meetlaag (geen curves, geen bruto grid-boekhouding, deficit-drempel
+   * op fallback). Deze sampler leest elke minuut P1/PV/Nexus/Tesla (read-only,
+   * device-mapping van de DecisionLog) en voedt dezelfde boekhouding. Zodra de
+   * échte EMS-lus actief is (applyConfig) doet de sampler niets (geen dubbele
+   * boeking). Stuurt NOOIT een commando — P2 (Nexus read-only) blijft geldig.
+   */
+  startObserver() {
+    if (this._observer) return;
+    const FALLBACK = {
+      p1:    'ec398f63-5125-49d2-95aa-94b822d055b6',
+      pv:    'ef2cb7fc-ce4c-4235-828b-99eb7cdb091a',
+      nexus: 'b3000657-38f3-4079-b309-074d0bc6edd1',
+    };
+    const devId = (key) => (this.homey.settings.get('decisionlog_devices') || {})[key] || FALLBACK[key];
+    const cap = async (id, c) => {
+      try { const dev = await this.app.getDevice(id); return dev?.capabilitiesObj?.[c]?.value ?? null; }
+      catch (_) { return null; }
+    };
+    this._observer = this.homey.setInterval(async () => {
+      if (this._loop) return;   // echte EMS-lus actief → die boekt al
+      try {
+        const [pvW, gridW, batW] = await Promise.all([
+          cap(devId('pv'), 'measure_power'),
+          cap(devId('p1'), 'measure_power'),
+          cap(devId('nexus'), 'measure_power'),
+        ]);
+        // EV-vermogen: alleen tellen als de Tesla-boolean zegt dat er geladen wordt
+        // (de vermogensmeting kan stale zijn — les 2026-06-10).
+        const sc = this.app.teslaScheduler?.getStatus?.() || null;
+        const evW = (sc && sc.charging_actual === true && typeof sc.charge_power_kw === 'number')
+          ? sc.charge_power_kw * 1000 : 0;
+        const state = { pvW: pvW ?? 0, gridW: gridW ?? 0, batPowerW: batW ?? 0, evW };
+        this._recordActuals(state);
+        await this.energyLedger.accumulate(state);
+        await this._updateConsumptionHistory(state);
+
+        // 1×/dag (eerste tick na 08:00): nachtload van afgelopen nacht vastleggen —
+        // voedt de rollende 7d-baseload en dus de levende deficit-drempel.
+        const loc = this._getLocalTime();
+        if (loc.hour >= 8 && this.homey.settings.get('night_load_computed_for') !== loc.dateStr) {
+          this.homey.settings.set('night_load_computed_for', loc.dateStr);
+          this.computeNightLoad();
+        }
+      } catch (e) { this.app.error('[EMS] observer:', e.message); }
+    }, 60_000);
+    this.app.log('[EMS] observe-only sampler actief (1 min) — meetlaag zonder stuurlus');
+  }
+
   async applyConfig(config) {
     this.app.log('[EMS] Config received, (re)initialising...');
     if (this._loop) { this.homey.clearInterval(this._loop); this._loop = null; }
