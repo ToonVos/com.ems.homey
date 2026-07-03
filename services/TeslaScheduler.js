@@ -1036,6 +1036,9 @@ class TeslaScheduler {
       charge_power_kw: chargePowerKw, car_state: carStateRead, wake_secs: wakeSecs,
       no_power: noPowerOnCable,
       health_guard: (this.homey.settings.get('ev_battery_health') ?? true),
+      // Levende §6.2-drempel (v5.13): meegelogd zodat de rollende nacht-baseload
+      // zichtbaar de drempel bijstelt (analyse + toekomstige dump-logica).
+      deficit_threshold_pct: this.app.ems?.getTeslaDeficitThresholdPct?.() ?? null,
       deadline_local: this.app.localTime(deadline),
       override_active: ov.active,
       decision, reason, charge_now: chargeNow,

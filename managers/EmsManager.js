@@ -573,6 +573,27 @@ class EmsManager {
     return values.reduce((s, v) => s + v, 0) / values.length;
   }
 
+  /**
+   * LEVENDE deficit-drempel (§6.2, ARCHITECTURE v5.13) — geen hard-coded 47%.
+   * Drempel = dagelijks Tesla-doel (60%) − wat een volle batterij de Tesla netto
+   * oplevert via de volledige keten: capaciteit × 0,95 (ontladen) × 0,95 (omvormer)
+   * − gemeten rollende nacht-baseload (7d, Nexus/Tesla uit de balans), × 0,90
+   * Tesla AC→DC. De drempel schuift dus automatisch mee met het seizoen
+   * (airco's zomer/winter). Met de historische 3,5 kWh-aanname ≈ 47%.
+   * Post-2027-dumplogica hoort híer te lezen, nooit een constante.
+   */
+  getTeslaDeficitThresholdPct() {
+    const s = this.homey.settings;
+    const batCap   = s.get('bat_capacity_kwh') ?? 20;
+    const teslaCap = s.get('ev_capacity_kwh') ?? 100;
+    const target   = s.get('ev_daily_target_pct') ?? 60;
+    const nightKwh = this.getRollingNightLoad();
+    const acKwh    = Math.max(0, batCap * 0.95 * 0.95 - nightKwh);
+    const teslaDcKwh = acKwh * 0.90;
+    const punten   = (teslaDcKwh / teslaCap) * 100;
+    return +(target - punten).toFixed(1);
+  }
+
   /** Rolling 3-day average day load per hour (array[24] kWh). Fallback: null. */
   getRollingDayLoad() {
     const arrays = [];

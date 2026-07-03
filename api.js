@@ -218,6 +218,14 @@ module.exports = {
       }
       const safe  = path.basename(query.name);   // geen path traversal buiten /userdata
       const txt   = fs.readFileSync(path.join(dir, safe), 'utf8').trim();
+      // Chunk-modus (?start=&length=): ruwe byte-window voor grote bestanden — de
+      // athom-CLI kapt responses op ~64 KB af, dus grote regels (pricehorizon) moeten
+      // in delen opgehaald worden. Client plakt de chunks aaneen.
+      if (query.start != null) {
+        const start = Math.max(0, Number(query.start) || 0);
+        const len   = Math.min(50_000, Math.max(1, Number(query.length) || 50_000));
+        return { name: safe, size: txt.length, start, chunk: txt.substring(start, start + len) };
+      }
       const lines = txt ? txt.split('\n') : [];
       const n     = Number(query.tail || 300);
       return { name: safe, total: lines.length, lines: lines.slice(-n) };
