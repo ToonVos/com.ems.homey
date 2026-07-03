@@ -1,0 +1,112 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --tx: var(--homey-text-color, #1c1c1e);
+    --dim: var(--homey-text-color-light, #8e8e93);
+    --line: rgba(128,128,128,.25);
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:-apple-system,"Segoe UI",Roboto,sans-serif; color:var(--tx); padding:12px; background:transparent; }
+  .head { display:flex; align-items:center; gap:10px; }
+  .head .emoji { font-size:28px; }
+  .head .what { font-size:15px; font-weight:650; }
+  .head .sub { font-size:11px; color:var(--dim); }
+  .reason { font-size:12px; color:var(--dim); margin:8px 0; line-height:1.4; }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px; }
+  .chip { font-size:11px; padding:3px 9px; border-radius:999px; background:rgba(128,128,128,.14); color:var(--tx); }
+  svg { width:100%; display:block; }
+  .foot { font-size:10px; color:var(--dim); margin-top:4px; }
+  .empty { color:var(--dim); font-size:12px; padding:14px 0; text-align:center; }
+</style>
+</head>
+<body>
+<div id="content"><div class="empty">Laden…</div></div>
+
+<script>
+let Homey = null;
+function onHomeyReady(_Homey) {
+  Homey = _Homey;
+  const FACE = {
+    charge_mandatory: ['⚡', 'Aan het laden (verplicht venster)'],
+    charge_opportunistic: ['🌊', 'Aan het laden (goedkope kans)'],
+    rust: ['😴', 'Rust — op niveau, Tesla regelt zichzelf'],
+    wait_cheaper: ['⏳', 'Wachten op goedkopere stroom'],
+    panic_charge: ['🚨', 'Noodlading (onder de vloer)'],
+    past_deadline: ['🏁', 'Deadline voorbij — doorladen'],
+    at_target: ['✅', 'Op doel'],
+    idle: ['💤', 'Niets te doen'],
+    skip_disconnected: ['🔌', 'Niet aangekoppeld'],
+    no_prices: ['❓', 'Geen prijzen — laden'],
+    inactive: ['⏸️', 'Scheduler inactief'],
+  };
+  const parseLocal = (s) => {
+    const m = String(s || '').match(/(\d{1,2})-(\d{1,2})-(\d{4}),?\s+(\d{1,2}):(\d{2})/);
+    return m ? new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]) : null;
+  };
+
+  function strip(horizon, windows) {
+    if (!horizon || horizon.length < 4) return '';
+    const W = 1000, H = 64, P = 4;
+    const t0 = horizon[0].t, t1 = horizon[horizon.length - 1].t + 15 * 60_000;
+    const ps = horizon.map(h => h.p);
+    const lo = Math.min(...ps), hi = Math.max(...ps), rng = hi - lo || 1;
+    const x = t => P + (t - t0) / (t1 - t0) * (W - 2 * P);
+    const bw = (W - 2 * P) / horizon.length;
+    let g = '';
+    // geplande vensters als achtergrond
+    for (const w of windows || []) {
+      const a = parseLocal(w.from_local), b = parseLocal(w.to_local);
+      if (!a || !b) continue;
+      g += `<rect x="${x(a.getTime())}" y="0" width="${Math.max(2, x(b.getTime()) - x(a.getTime()))}" height="${H - 12}" fill="#2ecc71" opacity=".22"/>`;
+    }
+    // prijsbalkjes
+    for (const h of horizon) {
+      const bh = 6 + ((h.p - lo) / rng) * (H - 24);
+      g += `<rect x="${x(h.t)}" y="${H - 12 - bh}" width="${bw * 0.85}" height="${bh}" rx="1"
+             fill="${h.t <= Date.now() && Date.now() < h.t + 15 * 60_000 ? '#e67e22' : '#4a90d9'}" opacity=".85"/>`;
+    }
+    // uurlabels om de 6u
+    for (let k = 0; k <= 24; k += 6) {
+      const t = t0 + k * 3_600_000;
+      if (t > t1) break;
+      g += `<text x="${x(t)}" y="${H - 1}" fill="#8e8e93" font-size="10">${new Date(t).getHours()}:00</text>`;
+    }
+    return `<svg viewBox="0 0 ${W} ${H}">${g}</svg>`;
+  }
+
+  function render(d) {
+    const el = document.getElementById('content');
+    if (!d || !d.ok) { el.innerHTML = `<div class="empty">${(d && d.error) || 'Geen data'}</div>`; return; }
+    const [emoji, what] = FACE[d.decision] || ['🤖', d.decision || 'Onbekend'];
+    const chips = [];
+    if (d.soc != null) chips.push(`SoC ${d.soc}% → ${d.target_pct ?? '?'}%`);
+    if (d.current_price_eur != null) chips.push(`nu €${d.current_price_eur.toFixed(3)}/kWh`);
+    if (d.car_limit != null) chips.push(`limiet ${d.car_limit}%`);
+    if (d.next_charge_local && !d.charge_now) chips.push(`volgende lading ${d.next_charge_local}`);
+    if (d.ready_by_local) chips.push(`klaar ~${d.ready_by_local}`);
+    el.innerHTML = `
+      <div class="head"><div class="emoji">${emoji}</div>
+        <div><div class="what">${what}</div>
+        <div class="sub">${d.connected === false ? 'auto niet verbonden' : (d.car_state || '')}</div></div></div>
+      <div class="reason">${d.reason || ''}</div>
+      <div class="chips">${chips.map(c => `<span class="chip">${c}</span>`).join('')}</div>
+      ${strip(d.horizon, d.plan_windows)}
+      <div class="foot">■ groen = gepland laadvenster · oranje balk = nu · bijgewerkt ${d.updated_local || ''}</div>`;
+    Homey.setHeight(document.body.scrollHeight + 8);
+  }
+
+  async function load() {
+    try { render(await Homey.api('GET', '/getWhy')); }
+    catch (e) { document.getElementById('content').innerHTML = `<div class="empty">${e.message || e}</div>`; }
+  }
+  Homey.ready();
+  load();
+  setInterval(load, 60 * 1000);
+}
+</script>
+</body>
+</html>

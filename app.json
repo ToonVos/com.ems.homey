@@ -1090,6 +1090,66 @@
         }
       },
       "id": "ems-energy"
+    },
+    "ems-decisions": {
+      "name": {
+        "en": "EMS Decision Timeline",
+        "nl": "EMS Beslis-tijdlijn"
+      },
+      "height": 210,
+      "settings": [],
+      "api": {
+        "getTimeline": {
+          "method": "GET",
+          "path": "/getTimeline"
+        }
+      },
+      "id": "ems-decisions"
+    },
+    "ems-curve": {
+      "name": {
+        "en": "EMS Day Curve",
+        "nl": "EMS Dagcurve"
+      },
+      "height": 200,
+      "settings": [],
+      "api": {
+        "getCurve": {
+          "method": "GET",
+          "path": "/getCurve"
+        }
+      },
+      "id": "ems-curve"
+    },
+    "ems-why": {
+      "name": {
+        "en": "EMS Why Now?",
+        "nl": "EMS Waarom nu?"
+      },
+      "height": 220,
+      "settings": [],
+      "api": {
+        "getWhy": {
+          "method": "GET",
+          "path": "/getWhy"
+        }
+      },
+      "id": "ems-why"
+    },
+    "ems-savings": {
+      "name": {
+        "en": "EMS Savings",
+        "nl": "EMS Besparing"
+      },
+      "height": 160,
+      "settings": [],
+      "api": {
+        "getSavings": {
+          "method": "GET",
+          "path": "/getSavings"
+        }
+      },
+      "id": "ems-savings"
     }
   },
   "api": {

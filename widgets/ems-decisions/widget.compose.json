@@ -1,0 +1,14 @@
+{
+  "name": {
+    "en": "EMS Decision Timeline",
+    "nl": "EMS Beslis-tijdlijn"
+  },
+  "height": 210,
+  "settings": [],
+  "api": {
+    "getTimeline": {
+      "method": "GET",
+      "path": "/getTimeline"
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": {
+    "en": "EMS Day Curve",
+    "nl": "EMS Dagcurve"
+  },
+  "height": 200,
+  "settings": [],
+  "api": {
+    "getCurve": {
+      "method": "GET",
+      "path": "/getCurve"
+    }
+  }
+}

@@ -1,0 +1,77 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --tx: var(--homey-text-color, #1c1c1e);
+    --dim: var(--homey-text-color-light, #8e8e93);
+    --line: rgba(128,128,128,.25);
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:-apple-system,"Segoe UI",Roboto,sans-serif; color:var(--tx); padding:10px 12px; background:transparent; }
+  svg { width:100%; display:block; }
+  .legend { display:flex; gap:10px; flex-wrap:wrap; font-size:10px; color:var(--dim); margin-top:6px; }
+  .legend i { display:inline-block; width:10px; height:3px; border-radius:2px; margin-right:3px; vertical-align:2px; }
+  .empty { color:var(--dim); font-size:12px; padding:14px 0; text-align:center; }
+</style>
+</head>
+<body>
+<div id="wrap"><div class="empty">Laden…</div></div>
+<div class="legend" id="legend"></div>
+
+<script>
+let Homey = null;
+function onHomeyReady(_Homey) {
+  Homey = _Homey;
+  const C = { pv:'#f6b93b', grid:'#e74c3c', bat:'#2ecc71', ev:'#9b59b6', huis:'#4a90d9' };
+
+  function render(d) {
+    const wrap = document.getElementById('wrap');
+    const slots = d && d.slots || [];
+    const series = { pv:[], grid:[], bat:[], ev:[], huis:[] };
+    for (const s of slots) {
+      if (!s) { Object.values(series).forEach(a => a.push(null)); continue; }
+      series.pv.push(s.pvW ?? 0); series.grid.push(s.gridW ?? 0);
+      series.bat.push(s.batW ?? 0); series.ev.push(s.evW ?? 0);
+      series.huis.push(Math.max(0, (s.pvW ?? 0) + (s.gridW ?? 0) - (s.batW ?? 0) - (s.evW ?? 0)));
+    }
+    const all = Object.values(series).flat().filter(v => v != null);
+    if (!all.length) { wrap.innerHTML = '<div class="empty">Nog geen metingen vandaag.</div>'; return; }
+
+    const W = 1000, H = 190, P = 8, PB = 16;
+    const mx = Math.max(1000, ...all.map(Math.abs));
+    const x = i => P + i * (W - 2 * P) / 143;
+    const y = v => (H - PB) / 2 - v / mx * ((H - PB) / 2 - P);
+    let g = `<line x1="${P}" y1="${y(0)}" x2="${W - P}" y2="${y(0)}" stroke="var(--line, rgba(128,128,128,.3))"/>`;
+    for (let h = 0; h <= 24; h += 6) {
+      const xx = P + h / 24 * (W - 2 * P);
+      g += `<text x="${xx}" y="${H - 2}" fill="#8e8e93" font-size="11" text-anchor="middle">${String(h).padStart(2, '0')}</text>`;
+    }
+    g += `<text x="${P + 2}" y="${y(mx) + 10}" fill="#8e8e93" font-size="10">${(mx / 1000).toFixed(1)} kW</text>`;
+    const line = (arr, col, w = 1.6) => {
+      let dd = '', pen = false;
+      arr.forEach((v, i) => { if (v == null) { pen = false; return; } dd += `${pen ? 'L' : 'M'}${x(i)},${y(v)}`; pen = true; });
+      return `<path d="${dd}" fill="none" stroke="${col}" stroke-width="${w}"/>`;
+    };
+    g += line(series.pv, C.pv) + line(series.grid, C.grid) + line(series.bat, C.bat)
+       + line(series.ev, C.ev) + line(series.huis, C.huis, 2.2);
+    wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}">${g}</svg>`;
+    document.getElementById('legend').innerHTML =
+      [['PV', C.pv], ['net (+imp/−exp)', C.grid], ['accu (+laden)', C.bat], ['Tesla', C.ev], ['huis', C.huis]]
+        .map(([n, c]) => `<span><i style="background:${c}"></i>${n}</span>`).join('');
+    Homey.setHeight(document.body.scrollHeight + 8);
+  }
+
+  async function load() {
+    try { render(await Homey.api('GET', '/getCurve')); }
+    catch (e) { document.getElementById('wrap').innerHTML = `<div class="empty">${e.message || e}</div>`; }
+  }
+  Homey.ready();
+  load();
+  setInterval(load, 5 * 60 * 1000);
+}
+</script>
+</body>
+</html>

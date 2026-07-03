@@ -1,0 +1,58 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --tx: var(--homey-text-color, #1c1c1e);
+    --dim: var(--homey-text-color-light, #8e8e93);
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:-apple-system,"Segoe UI",Roboto,sans-serif; color:var(--tx); padding:12px; background:transparent; }
+  .grid { display:flex; gap:10px; }
+  .cell { flex:1; text-align:center; padding:8px 4px; border-radius:10px; background:rgba(128,128,128,.10); }
+  .cell .k { font-size:10px; color:var(--dim); text-transform:uppercase; letter-spacing:.04em; }
+  .cell .v { font-size:22px; font-weight:750; margin-top:2px; }
+  .v.pos { color:#2ecc71; } .v.neg { color:#e74c3c; }
+  .sub { font-size:11px; color:var(--dim); margin-top:8px; line-height:1.4; }
+  .empty { color:var(--dim); font-size:12px; padding:14px 0; text-align:center; }
+</style>
+</head>
+<body>
+<div id="content"><div class="empty">Laden…</div></div>
+
+<script>
+let Homey = null;
+function onHomeyReady(_Homey) {
+  Homey = _Homey;
+  const eur = v => (v >= 0 ? '€' : '−€') + Math.abs(v).toFixed(2);
+  const cls = v => v >= 0 ? 'pos' : 'neg';
+
+  function render(d) {
+    const el = document.getElementById('content');
+    if (!d || !d.ok) { el.innerHTML = `<div class="empty">${(d && d.error) || 'Geen data'}</div>`; return; }
+    el.innerHTML = `
+      <div class="grid">
+        <div class="cell"><div class="k">💰 Vandaag</div><div class="v ${cls(d.today_eur)}">${eur(d.today_eur)}</div></div>
+        <div class="cell"><div class="k">Deze maand</div><div class="v ${cls(d.month_eur)}">${eur(d.month_eur)}</div></div>
+        <div class="cell"><div class="k">Totaal (${d.days_tracked}d)</div><div class="v ${cls(d.total_eur)}">${eur(d.total_eur)}</div></div>
+      </div>
+      <div class="sub">${d.kwh_today > 0
+        ? `Vandaag ${d.kwh_today} kWh geladen à Ø ${d.avg_paid_eur != null ? '€' + d.avg_paid_eur.toFixed(3) : '?'} — gemiddelde dagprijs was ${d.avg_day_eur != null ? '€' + d.avg_day_eur.toFixed(3) : '?'}/kWh.`
+        : 'Vandaag nog niet geladen.'}
+        Indicatief: besparing t.o.v. laden tegen de gemiddelde dagprijs.</div>`;
+    Homey.setHeight(document.body.scrollHeight + 8);
+  }
+
+  async function load() {
+    try { render(await Homey.api('GET', '/getSavings')); }
+    catch (e) { document.getElementById('content').innerHTML = `<div class="empty">${e.message || e}</div>`; }
+  }
+  Homey.ready();
+  load();
+  setInterval(load, 5 * 60 * 1000);
+}
+</script>
+</body>
+</html>

@@ -238,7 +238,15 @@ class EmsManager {
         const sc = this.app.teslaScheduler?.getStatus?.() || null;
         const evW = (sc && sc.charging_actual === true && typeof sc.charge_power_kw === 'number')
           ? sc.charge_power_kw * 1000 : 0;
-        const state = { pvW: pvW ?? 0, gridW: gridW ?? 0, batPowerW: batW ?? 0, evW,
+        // Nexus-meting loopt ~3 min achter (cloud). Als de balans fysiek onmogelijk
+        // is (afgeleid huisverbruik < 0, bv. −10 kW export terwijl de accu "+40 W"
+        // meldt), is de accu-waarde stale → leid hem dan af uit de balans met
+        // huis = 0 als ondergrens. Voorkomt dat handel-ontlading als "geen accu"
+        // geboekt wordt en het huisverbruik op 0 klapt.
+        let batC = batW ?? 0;
+        const resid = (pvW ?? 0) + (gridW ?? 0) - batC - evW - (hpW ?? 0) - (boilerW ?? 0);
+        if (resid < -50) batC = (pvW ?? 0) + (gridW ?? 0) - evW - (hpW ?? 0) - (boilerW ?? 0);
+        const state = { pvW: pvW ?? 0, gridW: gridW ?? 0, batPowerW: batC, evW,
                         hpW: hpW ?? 0, boilerW: boilerW ?? 0 };
         this._recordActuals(state);
         await this.energyLedger.accumulate(state);

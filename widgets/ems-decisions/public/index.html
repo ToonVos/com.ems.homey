@@ -1,0 +1,124 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --tx: var(--homey-text-color, #1c1c1e);
+    --dim: var(--homey-text-color-light, #8e8e93);
+    --line: rgba(128,128,128,.25);
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:-apple-system,"Segoe UI",Roboto,sans-serif; color:var(--tx); padding:10px 12px; background:transparent; }
+  svg { width:100%; display:block; }
+  .legend { display:flex; gap:10px; flex-wrap:wrap; font-size:10px; color:var(--dim); margin-top:6px; }
+  .legend i { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:3px; vertical-align:-1px; }
+  #reason { font-size:11px; color:var(--dim); margin-top:6px; min-height:28px; line-height:1.35; }
+  #reason b { color:var(--tx); }
+  .empty { color:var(--dim); font-size:12px; padding:14px 0; text-align:center; }
+</style>
+</head>
+<body>
+<div id="wrap"><div class="empty">Laden…</div></div>
+<div class="legend" id="legend"></div>
+<div id="reason">Tik op de tijdlijn voor de reden van dat moment.</div>
+
+<script>
+let Homey = null;
+function onHomeyReady(_Homey) {
+  Homey = _Homey;
+  // Kleuren gekozen op leesbaarheid in licht én donker thema.
+  const DC = {
+    charge_mandatory: '#2ecc71', charge_opportunistic: '#7ed6a5', panic_charge: '#e74c3c',
+    past_deadline: '#e67e22', no_prices: '#e67e22', rust: '#8fbf6a',
+    wait_cheaper: '#4a90d9', idle: '#9aa4b0', at_target: '#9aa4b0',
+    skip_disconnected: 'rgba(128,128,128,.18)', skip_no_soc: 'rgba(128,128,128,.18)', inactive: 'rgba(128,128,128,.18)',
+  };
+  const NAMES = { charge_mandatory:'laden (verplicht)', charge_opportunistic:'laden (opportunistisch)', rust:'rust op limiet',
+                  wait_cheaper:'wachten op goedkoper', panic_charge:'panic (≤vloer)', past_deadline:'deadline voorbij',
+                  at_target:'op doel', idle:'niets te doen', skip_disconnected:'niet verbonden' };
+  let ticks = [];
+
+  const parseLocal = (s) => {   // "3-7-2026, 09:01:44" → Date (lokale wandtijd van vandaag)
+    try {
+      const m = String(s).match(/(\d{1,2})-(\d{1,2})-(\d{4}),?\s+(\d{1,2}):(\d{2})/);
+      if (!m) return null;
+      return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]);
+    } catch (_) { return null; }
+  };
+
+  function render(d) {
+    const wrap = document.getElementById('wrap');
+    if (!d || !d.ok || !d.ticks.length) { wrap.innerHTML = '<div class="empty">Nog geen beslissingen vandaag.</div>'; return; }
+    ticks = d.ticks;
+    const W = 1000, H = 130, P = 6, BAND_Y = 18, BAND_H = 46, PR_Y = 74, PR_H = 46;
+    const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+    const x = (ms) => P + Math.max(0, Math.min(1, (ms - dayStart.getTime()) / 86_400_000)) * (W - 2 * P);
+
+    let g = '';
+    // uur-raster + labels
+    for (let h = 0; h <= 24; h += 3) {
+      const xx = P + h / 24 * (W - 2 * P);
+      g += `<line x1="${xx}" y1="${BAND_Y}" x2="${xx}" y2="${PR_Y + PR_H}" stroke="var(--line, rgba(128,128,128,.25))" stroke-width="1"/>`
+         + `<text x="${xx}" y="${H - 2}" fill="#8e8e93" font-size="11" text-anchor="middle">${String(h).padStart(2, '0')}</text>`;
+    }
+    // geplande vensters (arcering vooruit): boven de beslis-band
+    for (const w of d.plan_windows || []) {
+      const a = parseLocal(w.from_local), b = parseLocal(w.to_local);
+      if (!a || !b) continue;
+      g += `<rect x="${x(a.getTime())}" y="${BAND_Y - 10}" width="${Math.max(2, x(b.getTime()) - x(a.getTime()))}" height="8" rx="2"
+             fill="${w.type === 'mand' ? '#2ecc71' : '#7ed6a5'}" opacity=".55"><title>gepland ${w.from_local}–${w.to_local} (${w.kwh} kWh)</title></rect>`;
+    }
+    // beslis-blokken: van tick tot volgende tick (max 20 min)
+    for (let i = 0; i < ticks.length; i++) {
+      const t0 = new Date(ticks[i].ts).getTime();
+      const t1 = Math.min(t0 + 20 * 60_000, i + 1 < ticks.length ? new Date(ticks[i + 1].ts).getTime() : Date.now());
+      g += `<rect data-i="${i}" x="${x(t0)}" y="${BAND_Y}" width="${Math.max(1.5, x(t1) - x(t0))}" height="${BAND_H}"
+             fill="${DC[ticks[i].decision] || '#9aa4b0'}"/>`;
+      if (ticks[i].wake) g += `<circle cx="${x(t0)}" cy="${BAND_Y - 3}" r="2.5" fill="#e67e22"><title>wake</title></circle>`;
+    }
+    // prijslijn
+    const priced = ticks.filter(t => t.price != null);
+    if (priced.length > 1) {
+      const ps = priced.map(t => t.price);
+      const lo = Math.min(...ps), hi = Math.max(...ps), rng = hi - lo || 1;
+      const py = (p) => PR_Y + PR_H - ((p - lo) / rng) * PR_H;
+      g += `<path d="${priced.map((t, i) => `${i ? 'L' : 'M'}${x(new Date(t.ts).getTime())},${py(t.price)}`).join('')}"
+             fill="none" stroke="#4a90d9" stroke-width="1.8"/>`
+         + `<text x="${W - P}" y="${py(hi) + 10}" fill="#8e8e93" font-size="10" text-anchor="end">€${hi.toFixed(2)}</text>`
+         + `<text x="${W - P}" y="${py(lo) - 2}" fill="#8e8e93" font-size="10" text-anchor="end">€${lo.toFixed(2)}</text>`;
+    }
+    // nu-lijn
+    g += `<line x1="${x(Date.now())}" y1="${BAND_Y - 12}" x2="${x(Date.now())}" y2="${PR_Y + PR_H}" stroke="#e74c3c" stroke-width="1.5" stroke-dasharray="3,2"/>`;
+
+    wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" id="tl">${g}</svg>`;
+    document.getElementById('legend').innerHTML =
+      [['laden', '#2ecc71'], ['rust', '#8fbf6a'], ['wachten', '#4a90d9'], ['panic', '#e74c3c'], ['prijs', '#4a90d9'], ['gepland ▔', '#2ecc71'], ['• wake', '#e67e22']]
+        .map(([n, c]) => `<span><i style="background:${c}"></i>${n}</span>`).join('');
+
+    document.getElementById('tl').addEventListener('click', (ev) => {
+      const r = ev.target.closest('rect[data-i]');
+      if (!r) return;
+      const t = ticks[+r.dataset.i];
+      const tm = new Date(t.ts).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
+      document.getElementById('reason').innerHTML =
+        `<b>${tm} — ${NAMES[t.decision] || t.decision}</b>` +
+        `${t.soc != null ? ` · SoC ${t.soc}%` : ''}${t.price != null ? ` · €${t.price.toFixed(3)}` : ''}` +
+        `${t.commanded ? ` · cmd: ${t.commanded}` : ''}<br>${t.reason}`;
+      Homey.setHeight(document.body.scrollHeight + 8);
+    });
+    Homey.setHeight(document.body.scrollHeight + 8);
+  }
+
+  async function load() {
+    try { render(await Homey.api('GET', '/getTimeline')); }
+    catch (e) { document.getElementById('wrap').innerHTML = `<div class="empty">${e.message || e}</div>`; }
+  }
+  Homey.ready();
+  load();
+  setInterval(load, 5 * 60 * 1000);
+}
+</script>
+</body>
+</html>

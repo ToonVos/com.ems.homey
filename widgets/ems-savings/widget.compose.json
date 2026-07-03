@@ -1,0 +1,14 @@
+{
+  "name": {
+    "en": "EMS Savings",
+    "nl": "EMS Besparing"
+  },
+  "height": 160,
+  "settings": [],
+  "api": {
+    "getSavings": {
+      "method": "GET",
+      "path": "/getSavings"
+    }
+  }
+}
