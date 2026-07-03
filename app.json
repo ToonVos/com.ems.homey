@@ -1111,7 +1111,7 @@
         "en": "EMS Day Curve",
         "nl": "EMS Dagcurve"
       },
-      "height": 200,
+      "height": 400,
       "settings": [],
       "api": {
         "getCurve": {
