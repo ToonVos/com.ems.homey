@@ -113,8 +113,10 @@ class PricePredictor {
     const now = Date.now();
     if (this._ezMap && (now - this._ezAt) < 60 * 60 * 1000) return this._ezMap;
     try {
+      // Ruim UTC-venster (gister t/m overmorgen) zodat "vandaag+morgen" lokale tijd
+      // er altijd volledig in valt, ongeacht zomertijd; de map is per uur gekeyd.
       const ymd  = d => d.toISOString().substring(0, 10);
-      const from = new Date(now), till = new Date(now + 24 * 60 * 60 * 1000);
+      const from = new Date(now - 24 * 60 * 60 * 1000), till = new Date(now + 48 * 60 * 60 * 1000);
       const url  = `https://api.energyzero.nl/v1/energyprices?fromDate=${ymd(from)}T00:00:00.000Z`
                  + `&tillDate=${ymd(till)}T23:59:59.999Z&interval=4&usageType=1&inclBtw=false`;
       const res  = await fetch(url, { signal: AbortSignal.timeout(12000) });
@@ -122,11 +124,12 @@ class PricePredictor {
       const data = await res.json();
       const pr   = data.Prices || data.prices || [];
       const HOUR = 3_600_000;
+      const P    = this.priceParams();
       const map  = new Map();
       for (const p of pr) {
         const t = new Date(p.readingDate).getTime();
         if (!isFinite(t) || typeof p.price !== 'number') continue;
-        map.set(Math.floor(t / HOUR) * HOUR, +(p.price * BTW + EB_PLUS_INKOOP).toFixed(5));
+        map.set(Math.floor(t / HOUR) * HOUR, +(p.price * P.btw + P.energyTax + P.supplierFee).toFixed(5));
       }
       if (!map.size) throw new Error('geen prijzen ontvangen');
       this._ezMap = map; this._ezAt = now;
@@ -141,6 +144,7 @@ class PricePredictor {
   /** Forceer een verse ophaalslag (bv. nadat contract op dynamisch is gezet). */
   async refreshNow() {
     this._fetchedAt = 0;
+    this._ezMap = null; this._ezAt = 0;   // ook de EnergyZero-uurcache met oude parameters weg
     await this._refreshSafe();
   }
 
@@ -163,11 +167,15 @@ class PricePredictor {
     const P = this.priceParams();
     this._horizon = s.map((sec, i) => {
       const kale = t[i] / 100;                                  // ct/kWh → €/kWh
+      // Zonnebonus (Zonneplan): (kale + €0,02) × 1,10, maar alléén als die som positief is
+      // (en formeel alleen overdag voor PV, niet voor batterij-ontlading; bij negatieve
+      // prijs geldt gewoon de kale prijs). Bron: zonneplan.nl terugleververgoeding.
+      const bonusBase = kale + P.exportBonus;
       return {
         ts:         new Date(sec * 1000).toISOString(),
         kale_eur:   +kale.toFixed(5),
         import_eur: +(kale * P.btw + P.energyTax + P.supplierFee).toFixed(5),
-        export_eur: +((kale + P.exportBonus) * P.exportFactor).toFixed(5),
+        export_eur: +(bonusBase > 0 ? bonusBase * P.exportFactor : kale).toFixed(5),
       };
     });
     this._fetchedAt = Date.now();

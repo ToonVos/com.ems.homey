@@ -216,10 +216,11 @@ module.exports = {
           }),
         };
       }
-      const txt   = fs.readFileSync(path.join(dir, query.name), 'utf8').trim();
+      const safe  = path.basename(query.name);   // geen path traversal buiten /userdata
+      const txt   = fs.readFileSync(path.join(dir, safe), 'utf8').trim();
       const lines = txt ? txt.split('\n') : [];
       const n     = Number(query.tail || 300);
-      return { name: query.name, total: lines.length, lines: lines.slice(-n) };
+      return { name: safe, total: lines.length, lines: lines.slice(-n) };
     } catch (e) { return { error: e.message }; }
   },
 

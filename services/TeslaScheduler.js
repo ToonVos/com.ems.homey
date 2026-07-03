@@ -29,6 +29,7 @@
 
 const fs   = require('fs');
 const path = require('path');
+const slotSelection = require('./planner/slotSelection');
 
 const USERDATA_DIR = '/userdata';
 const RING_MAX     = 4000;
@@ -67,9 +68,35 @@ class TeslaScheduler {
     this._session = null;          // lopende laadsessie (voor lerend tijd/temp-model, fase A)
   }
 
+  /**
+   * Persisteer de stuur-state (laatst gestuurde wens + mismatch-streak) zodat een
+   * app-herstart/deploy niet met `_lastSentWant=null` begint — dat kostte na élke deploy
+   * één onnodig start-commando op een auto die netjes op de limiet "rust" (carMaintaining
+   * vereist `_lastSentWant === true`). Write-on-change (flash-wear).
+   */
+  _persistSent() {
+    const s = this.homey.settings;
+    if (s.get('tesla_last_sent_want') !== this._lastSentWant) s.set('tesla_last_sent_want', this._lastSentWant);
+    if (s.get('tesla_mismatch_streak') !== this._mismatchStreak) s.set('tesla_mismatch_streak', this._mismatchStreak);
+    if (this._lastSentTs && s.get('tesla_last_sent_ts') !== this._lastSentTs) s.set('tesla_last_sent_ts', this._lastSentTs);
+  }
+
+  _restoreSent() {
+    const s = this.homey.settings;
+    const want = s.get('tesla_last_sent_want');
+    if (typeof want === 'boolean') this._lastSentWant = want;
+    const streak = s.get('tesla_mismatch_streak');
+    if (typeof streak === 'number') this._mismatchStreak = streak;
+    const ts = s.get('tesla_last_sent_ts');
+    if (typeof ts === 'number') this._lastSentTs = ts;
+  }
+
   async init() {
     try { fs.mkdirSync(USERDATA_DIR, { recursive: true }); } catch (_) {}
     try { this._bootstrapPluggedSince(); } catch (e) { this.app.error('[TeslaSched] bootstrap-fout:', e.message); }
+    try { this._restoreSent(); } catch (_) {}
+    this._cleanupUserdata();
+    this.homey.setInterval(() => this._cleanupUserdata(), 24 * 60 * 60 * 1000);
     // Wacht 30s voor de eerste tick zodat Homey's capability-cache gevuld is.
     // Zonder vertraging ziet de adapter na herstart alle caps als null → false connected.
     this.homey.setTimeout(() => this._tickSafe(), 30_000);
@@ -89,9 +116,13 @@ class TeslaScheduler {
       this.app.log(`[TeslaSched] _pluggedSince hersteld uit setting: ${new Date(saved).toISOString()}`);
       return;
     }
-    // Geen saved setting: zoek de vroegste connected=true in de JSONL van gisteren + vandaag.
+    // Geen saved setting: zoek de LAATSTE false→true-transitie in de JSONL van gisteren +
+    // vandaag (chronologisch). De vroegste connected=true zou bij een tussentijdse ont-/
+    // herkoppeling de óúde sessie pakken en het vaste 24u-bewaarstand-venster fout herstellen.
     const path = require('path');
     const now = new Date();
+    let prevConnected = null;   // laatst geziene connected-waarde over de dagen heen
+    let lastPlugMs = null, lastPlugTs = null;
     for (let daysAgo = 1; daysAgo >= 0; daysAgo--) {
       const d = new Date(now.getTime() - daysAgo * 86400000);
       const day = `${d.getUTCFullYear()}${String(d.getUTCMonth()+1).padStart(2,'0')}${String(d.getUTCDate()).padStart(2,'0')}`;
@@ -101,20 +132,23 @@ class TeslaScheduler {
         for (const line of lines) {
           try {
             const rec = JSON.parse(line);
-            if (rec.connected === true && rec.ts) {
+            if (typeof rec.connected !== 'boolean' || !rec.ts) continue;
+            if (rec.connected === true && prevConnected !== true) {
               const ms = new Date(rec.ts).getTime();
-              if (!isNaN(ms)) {
-                this._pluggedSince = ms;
-                this.homey.settings.set('ev_plugged_since_ms', ms);
-                this.app.log(`[TeslaSched] _pluggedSince gebootstrapt uit JSONL ${day}: ${rec.ts}`);
-                return;
-              }
+              if (!isNaN(ms)) { lastPlugMs = ms; lastPlugTs = rec.ts; }
             }
+            prevConnected = rec.connected;
           } catch (_) {}
         }
       } catch (_) {}
     }
-    this.app.log('[TeslaSched] _pluggedSince: geen eerdere inplugging gevonden in JSONL');
+    if (lastPlugMs != null && prevConnected === true) {
+      this._pluggedSince = lastPlugMs;
+      this.homey.settings.set('ev_plugged_since_ms', lastPlugMs);
+      this.app.log(`[TeslaSched] _pluggedSince gebootstrapt uit JSONL (laatste aankoppeling): ${lastPlugTs}`);
+      return;
+    }
+    this.app.log('[TeslaSched] _pluggedSince: geen lopende aankoppeling gevonden in JSONL');
   }
 
   /**
@@ -130,9 +164,20 @@ class TeslaScheduler {
       if (!deviceId) return;
       try {
         const dev = await this.app.getDevice(deviceId);
+        // Continu fluctuerende meetwaarden (laadvermogen, SoC) triggerden tijdens laden bij
+        // élke wijziging een volledige tick (device-reads, horizon-blend, 3× slot-optimalisatie,
+        // JSONL-append) — puur CPU/flash-last, geen API-kosten (lokale capability-push). Echte
+        // toestandswisselingen (charging_on, car_state, kabel) blijven direct; ruis-caps krijgen
+        // een debounce van 30s.
+        const NOISY = new Set(['measure_charge_power', 'measure_soc_usable', 'measure_soc_level']);
         for (const cap of caps) {
           if (!dev.capabilities?.includes(cap)) continue;
           const inst = dev.makeCapabilityInstance(cap, (value) => {
+            if (NOISY.has(cap)) {
+              const now = Date.now();
+              if (now - (this._lastNoisyTick || 0) < 30_000) return;
+              this._lastNoisyTick = now;
+            }
             this.app.log(`[TeslaSched] push ${label}.${cap}=${value} → tick`);
             this._tickSafe();
           });
@@ -328,7 +373,9 @@ class TeslaScheduler {
     const prev = this._evLastAddedDc;
     const deltaDc = addedDc >= prev ? (addedDc - prev) : addedDc;   // dalend = nieuwe sessie (reset naar ~0)
     this._evLastAddedDc = addedDc;
-    this.homey.settings.set('tesla_ev_last_added_dc', addedDc);
+    // Alleen schrijven bij verandering: settings zijn flash-writes én triggeren settings-events;
+    // ongewijzigd elke tick wegschrijven is puur slijtage/ruis.
+    if (addedDc !== prev) this.homey.settings.set('tesla_ev_last_added_dc', addedDc);
     if (deltaDc > 0) {
       const eff = Math.min(1, Math.max(0.5, this.homey.settings.get('ev_charge_efficiency') ?? 0.90));
       this._evTotalAcKwh += deltaDc / eff;
@@ -428,6 +475,7 @@ class TeslaScheduler {
     if (chargeMode !== 'price' || contract !== 'dynamic') {
       this._lastSentWant = null;
       this._mismatchStreak = 0;
+      this._persistSent();
       const why = chargeMode !== 'price'
         ? `laadmodus '${chargeMode}'`
         : 'vast tarief (geen uurprijzen)';
@@ -839,11 +887,28 @@ class TeslaScheduler {
       //     onderweg (DC) de limiet nooit aanraken. Via de trigger-brug `ems:setEvChargeLimit` →
       //     de gebruiker koppelt die aan de Tesla-actie "Stel Laadlimiet SoC in" (een app mag de
       //     flow-actie niet zelf draaien: "Missing Scopes"). RECONCILE-gate tegen herhaald vuren.
-      if (live && atHome && carLimit != null && carLimit !== limitTarget &&
-          (Date.now() - (this._lastLimitTry || 0)) >= RECONCILE_MS) {
-        this.homey.emit('ems:setEvChargeLimit', limitTarget);
-        this._lastLimit = limitTarget; this._lastLimitTry = Date.now();
-        this._bumpCmd(); verify = `limiet→${limitTarget}%`;
+      if (live && atHome && carLimit != null && carLimit !== limitTarget) {
+        // Watchdog op de flow-brug: de limiet is de HOOFD-sturing, maar loopt via een
+        // user-flow die stil kan wegvallen (uitgezet/verwijderd). Volgt een wakkere auto
+        // de geëmitte limiet na herhaalde pogingen niet, dan is de brug vermoedelijk stuk
+        // → éénmalig melden i.p.v. eeuwig stil falen.
+        const staleTry = this._lastLimit === limitTarget &&
+                         (Date.now() - (this._lastLimitTry || 0)) >= RECONCILE_MS;
+        if (staleTry && carStateRead === 'online') {
+          this._limitFailStreak = (this._limitFailStreak || 0) + 1;
+          if (this._limitFailStreak >= 3 && !this._limitBridgeNotified) {
+            this._limitBridgeNotified = true;
+            this.app.notifications?.send(
+              `⚠️ De Tesla-laadlimiet volgt niet (auto meldt ${carLimit}%, gewenst ${limitTarget}%). ` +
+              'Controleer of de flow "EMS → Stel Laadlimiet SoC in" nog bestaat en aan staat.',
+              'tesla'
+            );
+          }
+        }
+        if (this._setLimit(limitTarget)) verify = `limiet→${limitTarget}%`;
+      } else if (carLimit != null && carLimit === limitTarget) {
+        this._limitFailStreak = 0;
+        this._limitBridgeNotified = false;
       }
 
       // 4b. Start/stop voor timing. Twee gevallen:
@@ -884,12 +949,12 @@ class TeslaScheduler {
 
       if (!atHome) {
         // Onderweg (DC-snelladen): niet sturen; laat de auto/gebruiker het regelen.
-        this._lastSentWant = null; this._mismatchStreak = 0;
+        this._lastSentWant = null; this._mismatchStreak = 0; this._persistSent();
         if (!verify) verify = 'onderweg (DC) — niet sturen';
       } else if (noPowerOnCable && want2) {
         // Kabel ingeplugd maar geen stroom (laadpunt uit / rode kabel): starten is zinloos
         // (kost alleen commando's/wakes). Niet sturen; gebruiker éénmalig waarschuwen.
-        this._lastSentWant = null; this._mismatchStreak = 0;
+        this._lastSentWant = null; this._mismatchStreak = 0; this._persistSent();
         verify = 'geen stroom op kabel (laadpunt uit?)';
         if (!this._noPowerNotified) {
           this._noPowerNotified = true;
@@ -939,11 +1004,13 @@ class TeslaScheduler {
         }
         this._lastSentWant = want2;
         this._lastSentTs   = Date.now();
+        this._persistSent();
         this._bumpCmd();
         if (!verify) verify = `stuur#${this._mismatchStreak}`;
       } else if (!mismatch) {
         this._mismatchStreak = 0;
         this._lastDriveError = null;
+        this._persistSent();
         if (!verify && actual !== null) verify = `ok(limiet ${carLimit ?? '?'}%)`;
       }
      } catch (err) {
@@ -956,6 +1023,7 @@ class TeslaScheduler {
     } else {
       this._lastSentWant = null;
       this._mismatchStreak = 0;
+      this._persistSent();
     }
 
     // 5. Record
@@ -1193,20 +1261,9 @@ class TeslaScheduler {
     } catch (_) { return null; }
   }
 
-  /** Goedkoopste slots tot kwhNeeded gedekt is (excl. excludeSet). */
+  /** Goedkoopste slots tot kwhNeeded gedekt is (excl. excludeSet). Pure kern: services/planner. */
   _pickCheapest(slots, kwhNeeded, slotKwh, excludeSet) {
-    const set = new Set();
-    let count = 0, acc = 0, lastTs = null;
-    if (kwhNeeded <= 0 || slotKwh <= 0) return { set, count, lastTs };
-    const sorted = slots
-      .filter(s => !excludeSet || !excludeSet.has(s.t))
-      .sort((a, b) => a.import_eur - b.import_eur);
-    for (const s of sorted) {
-      if (acc >= kwhNeeded) break;
-      set.add(s.t); acc += slotKwh; count++;
-    }
-    if (set.size) lastTs = Math.max(...set);   // laatste (chronologisch) gekozen slot
-    return { set, count, lastTs };
+    return slotSelection.pickCheapest(slots, kwhNeeded, slotKwh, excludeSet);
   }
 
   /**
@@ -1221,53 +1278,7 @@ class TeslaScheduler {
    * dekt 3+ dips). Aanname: de horizon is in de tijd aaneengesloten (PricePredictor-slots).
    */
   _pickContiguousOptimal(slots, kwhNeeded, slotKwh, excludeSet, sessionEur) {
-    const set = new Set(); let count = 0, lastTs = null;
-    if (kwhNeeded <= 0 || slotKwh <= 0) return { set, count, lastTs };
-    const avail = slots.filter(s => !excludeSet || !excludeSet.has(s.t)).sort((a, b) => a.t - b.t);
-    const N = avail.length;
-    const n = Math.min(N, Math.ceil(kwhNeeded / slotKwh));
-    if (n <= 0) return { set, count, lastTs };
-    if (n >= N) { avail.forEach(s => set.add(s.t)); return { set, count: N, lastTs: avail[N - 1].t }; }
-
-    const price = avail.map(s => s.import_eur ?? 0);
-    const pre = [0];
-    for (let i = 0; i < N; i++) pre.push(pre[i] + price[i]);
-    const winCost = (s, len) => (pre[s + len] - pre[s]) * slotKwh;       // € energie
-    const runsOf = (idxs) => { const a = [...idxs].sort((x, y) => x - y); let r = 0; for (let i = 0; i < a.length; i++) if (i === 0 || a[i] !== a[i - 1] + 1) r++; return r; };
-
-    let best = { cost: Infinity, idxs: null };
-    // k=1: één aaneengesloten blok van n slots
-    for (let s = 0; s + n <= N; s++) {
-      const c = winCost(s, n) + sessionEur;
-      if (c < best.cost) best = { cost: c, idxs: Array.from({ length: n }, (_, k) => s + k) };
-    }
-    // k=2: twee disjuncte blokken (lengtes a en n−a)
-    for (let a = 1; a < n; a++) {
-      const b = n - a;
-      for (let sa = 0; sa + a <= N; sa++) {
-        for (let sb = 0; sb + b <= N; sb++) {
-          if (sb + b <= sa || sb >= sa + a) {                            // disjunct
-            const c = winCost(sa, a) + winCost(sb, b) + 2 * sessionEur;
-            if (c < best.cost) {
-              const idxs = [];
-              for (let k = 0; k < a; k++) idxs.push(sa + k);
-              for (let k = 0; k < b; k++) idxs.push(sb + k);
-              best = { cost: c, idxs };
-            }
-          }
-        }
-      }
-    }
-    // losse goedkoopste n slots, met run-penalty (dekt 3+ dips als dat goedkoper is)
-    {
-      const order = avail.map((s, i) => ({ i, p: price[i] })).sort((x, y) => x.p - y.p).slice(0, n).map(o => o.i);
-      const c = order.reduce((acc, i) => acc + price[i] * slotKwh, 0) + runsOf(order) * sessionEur;
-      if (c < best.cost) best = { cost: c, idxs: order };
-    }
-
-    best.idxs.forEach(i => set.add(avail[i].t));
-    count = set.size; lastTs = set.size ? Math.max(...set) : null;
-    return { set, count, lastTs };
+    return slotSelection.pickContiguousOptimal(slots, kwhNeeded, slotKwh, excludeSet, sessionEur);
   }
 
   _tempBucket(t) {
@@ -1290,7 +1301,8 @@ class TeslaScheduler {
     if (!(value > lo && value < hi)) return;
     const prev = this.homey.settings.get(key);
     const ewma = (typeof prev === 'number') ? prev * (1 - a) + value * a : value;
-    this.homey.settings.set(key, +ewma.toFixed(dp));
+    const next = +ewma.toFixed(dp);
+    if (next !== prev) this.homey.settings.set(key, next);   // write-on-change (flash-wear)
   }
 
   /**
@@ -1399,6 +1411,24 @@ class TeslaScheduler {
     return (typeof v === 'number' && v > 0 && v < 120) ? v : 60;
   }
 
+  /**
+   * ÉÉN stuurpad voor de laadlimiet-brug (`ems:setEvChargeLimit`). Voorheen emitten het
+   * reconcile-pad (4a) en `_drive()` onafhankelijk met elk hun eigen state (`_lastLimitTry`
+   * vs `_lastLimit`) → na een `_wake()` (die `_lastLimit` reset) gingen er twee identieke
+   * flow-triggers/commando's in één tick uit. Nu: één waarde+timestamp; dezelfde waarde
+   * wordt binnen RECONCILE_MS niet opnieuw geëmit.
+   * @returns {boolean} of er daadwerkelijk geëmit is.
+   */
+  _setLimit(pct) {
+    const limit = Math.max(50, Math.min(100, Math.round(pct)));
+    const now = Date.now();
+    if (this._lastLimit === limit && (now - (this._lastLimitTry || 0)) < RECONCILE_MS) return false;
+    this.homey.emit('ems:setEvChargeLimit', limit);
+    this._lastLimit = limit; this._lastLimitTry = now;
+    this._bumpCmd();
+    return true;
+  }
+
   // Stuurt de Tesla. Start/stop = de SETTABLE capability `charging_on` (betrouwbaar, werkt direct).
   // Laadlimiet + laadstroom kan een app NIET zelf zetten (flow-acties → "Missing Scopes"); die gaan
   // via trigger-bruggen (`ems:setEvChargeLimit` / `ems:setEvChargeCurrent`) die de gebruiker aan de
@@ -1407,8 +1437,7 @@ class TeslaScheduler {
     const dev = this._teslaBatId();
     try {
       // Hoofd-stop: laadlimiet = capPct ("laad tot X%"). De auto stopt hier zelf, ook slapend ladend.
-      const limit = Math.max(50, Math.min(100, Math.round(capPct)));
-      if (this._lastLimit !== limit) { this.homey.emit('ems:setEvChargeLimit', limit); this._lastLimit = limit; }
+      this._setLimit(capPct);
 
       // Timing: start/stop via de settable capability `charging_on` (betrouwbaar).
       const drivePromise = this.app.setDeviceCapability(dev, 'charging_on', !!wantCharge);
@@ -1431,7 +1460,12 @@ class TeslaScheduler {
   }
 
   _bumpCmd() {
-    const day = new Date().toISOString().substring(0, 10);
+    // Dag-grens LOKAAL (niet UTC): het ~40-commands/dag-richtbudget resette anders om
+    // 01:00/02:00 NL-tijd — midden in het goedkope nacht-laadvenster.
+    let day;
+    try {
+      day = new Date().toLocaleDateString('sv-SE', { timeZone: this.homey.clock.getTimezone() });
+    } catch (_) { day = new Date().toISOString().substring(0, 10); }
     if (this._cmdDay !== day) { this._cmdDay = day; this._cmdCount = 0; }
     this._cmdCount++;
   }
@@ -1441,6 +1475,29 @@ class TeslaScheduler {
       const day = rec.ts.substring(0, 10).replace(/-/g, '');
       fs.appendFileSync(path.join(USERDATA_DIR, `teslasched-${day}.jsonl`), JSON.stringify(rec) + '\n');
     } catch (err) { this.app.error('[TeslaSched] schrijffout:', err.message); }
+  }
+
+  /**
+   * Retentie op de dag-JSONL's in /userdata: die groeiden onbegrensd (vooral
+   * pricehorizon-*.jsonl, dat per 6u-refresh de volledige 168u-horizon appendt).
+   * Volgelopen storage laat alle appendFileSync-calls stil falen — inclusief de
+   * beslis-log die juist voor terugwerkende analyse bestaat. Draait bij init + 1×/dag.
+   * Instelbaar via setting `log_retention_days` (default 90).
+   */
+  _cleanupUserdata() {
+    try {
+      const days = this.homey.settings.get('log_retention_days') ?? 90;
+      const cutoff = Date.now() - days * 86_400_000;
+      for (const f of fs.readdirSync(USERDATA_DIR)) {
+        const m = f.match(/^(?:teslasched|pricehorizon)-(\d{4})(\d{2})(\d{2})\.jsonl$/);
+        if (!m) continue;
+        const fileMs = Date.UTC(+m[1], +m[2] - 1, +m[3]);
+        if (fileMs < cutoff) {
+          try { fs.unlinkSync(path.join(USERDATA_DIR, f)); this.app.log(`[TeslaSched] retentie: ${f} verwijderd (> ${days}d)`); }
+          catch (_) {}
+        }
+      }
+    } catch (e) { this.app.error('[TeslaSched] retentie-fout:', e.message); }
   }
 
 }

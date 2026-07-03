@@ -475,14 +475,20 @@ class EmsManager {
       let totalKwh = 0;
       let slots    = 0;
 
+      // Nacht-balans (pvW ≈ 0): huis = grid − EV − batterij (batW: + = laden).
+      // De Nexus handelt met ±10 kW op de onbalansmarkt; zonder batW-correctie
+      // meet je Powerplay-handel als "huisverbruik" (v5.13-besluit: baseload =
+      // huisbalans met batterij én auto eruit gerekend).
+      const slotKwhNight = (d) =>
+        Math.max(0, (d.gridW - (d.evW ?? 0) - (d.batW ?? 0))) * (10 / 60 / 1000);
+
       // Yesterday: sunset hour → 23:59
       const sunsetH = Math.floor(sunYest.sunsetH);
       for (let h = sunsetH; h < 24; h++) {
         for (let s = 0; s < 6; s++) {
           const d = this.homey.settings.get(`actuals_${yestStr}_${h}_${s}`);
           if (!d || d.n === 0) continue;
-          // Night: pvW ≈ 0, house = gridW - evW
-          totalKwh += Math.max(0, (d.gridW - (d.evW ?? 0))) * (10 / 60 / 1000);
+          totalKwh += slotKwhNight(d);
           slots++;
         }
       }
@@ -493,7 +499,7 @@ class EmsManager {
         for (let s = 0; s < 6; s++) {
           const d = this.homey.settings.get(`actuals_${todayStr}_${h}_${s}`);
           if (!d || d.n === 0) continue;
-          totalKwh += Math.max(0, (d.gridW - (d.evW ?? 0))) * (10 / 60 / 1000);
+          totalKwh += slotKwhNight(d);
           slots++;
         }
       }
@@ -529,8 +535,9 @@ class EmsManager {
         for (let s = 0; s < 6; s++) {
           const d = this.homey.settings.get(`actuals_${todayStr}_${h}_${s}`);
           if (!d || d.n === 0) continue;
-          // Day: house = pvW + gridW - evW (solar offsets some grid)
-          hourlyKwh[h] += Math.max(0, (d.pvW ?? 0) + d.gridW - (d.evW ?? 0)) * (10 / 60 / 1000);
+          // Day: huis = pv + grid − EV − batterij (batW: + = laden; Nexus-handel
+          // hoort niet in het huisverbruik — zelfde correctie als computeNightLoad).
+          hourlyKwh[h] += Math.max(0, (d.pvW ?? 0) + d.gridW - (d.evW ?? 0) - (d.batW ?? 0)) * (10 / 60 / 1000);
         }
       }
 
@@ -544,10 +551,17 @@ class EmsManager {
     }
   }
 
-  /** Rolling 3-day average night load (kWh). Fallback: 30% of bat capacity. */
+  /**
+   * Rolling 7-day average night load (kWh). Fallback: 30% of bat capacity.
+   * v5.13: terugkijk-venster van een week (was 3 dagen) zodat de seizoens-
+   * verschuivende baseload (airco's zomer én winter) op werkelijkheid meeloopt
+   * — dit is de gemeten vervanger van de aanname home_night_consumption_kwh=3,5
+   * in de 47%-afleiding (ARCHITECTURE §6.2).
+   */
   getRollingNightLoad() {
+    const days = this.homey.settings.get('night_load_lookback_days') ?? 7;
     const values = [];
-    for (let i = 1; i <= 3; i++) {
+    for (let i = 1; i <= days; i++) {
       const d = new Date(); d.setDate(d.getDate() - i);
       const v = this.homey.settings.get(`night_load_${this._localDateStr(d)}`);
       if (v != null) values.push(v);

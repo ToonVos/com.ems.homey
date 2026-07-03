@@ -281,6 +281,12 @@ class EmsApp extends Homey.App {
       if (key === 'contract_type') {
         this.log(`[EMS] contract_type → ${this.homey.settings.get('contract_type')}`);
         this.pricePredictor?.refreshNow?.();
+      } else if (key.startsWith('price_')) {
+        // Prijs-componenten (btw, energiebelasting, opslag, exportbonus) gewijzigd:
+        // de all-in horizon is met de óúde parameters opgebouwd en zou anders tot 6u
+        // stale blijven — de planner plant dan op verouderde prijzen.
+        this.log(`[EMS] prijsparameter ${key} gewijzigd → horizon herberekenen`);
+        this.pricePredictor?.refreshNow?.();
       }
     });
 
