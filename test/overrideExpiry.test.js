@@ -79,3 +79,65 @@ test('carMaintaining: soc ver onder de limiet triggert wél een mismatch', () =>
   assert.equal(reached, false);
   assert.equal(carMaintaining, false, 'buiten de tolerantie moet het commando gewoon volgen');
 });
+
+// ─── _oppWindowEndMs: kalenderdagen, geen uren ───────────────────────────────
+// Regressietest voor "zaterdag stond opportunistisch gepland, terwijl dat de 7e
+// dag vanaf nu is". Een uren-venster (144u vanaf het tick-moment) trekt op zondag-
+// middag nog een flink stuk zaterdag binnen. Kalenderdag-tellen (vandaag = dag 1)
+// moet die 7e dag altijd volledig buitensluiten, ongeacht het tijdstip van de tick.
+
+function makeSchedulerWithTz() {
+  const homey = {
+    settings: { get: k => (k === 'ev_opportunistic_window_days' ? 6 : undefined) },
+    clock: { getTimezone: () => 'Europe/Amsterdam' },
+  };
+  const app = {
+    _tzParts(date, tz) {
+      const opts = { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' };
+      if (tz) opts.timeZone = tz;
+      return new Intl.DateTimeFormat('en-CA', opts).formatToParts(date).reduce((a, x) => (a[x.type] = x.value, a), {});
+    },
+    _tzOffsetMs(date, tz) {
+      const p = new Intl.DateTimeFormat('en-US', {
+        ...(tz ? { timeZone: tz } : {}), hour12: false, year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      }).formatToParts(date).reduce((a, x) => (a[x.type] = x.value, a), {});
+      const h = p.hour === '24' ? 0 : Number(p.hour);
+      return Date.UTC(+p.year, +p.month - 1, +p.day, h, +p.minute, +p.second) - date.getTime();
+    },
+    _zonedWallToUtc(y, mo, d, h, min, tz) {
+      const utcGuess = Date.UTC(y, mo - 1, d, h, min, 0);
+      let off = this._tzOffsetMs(new Date(utcGuess), tz);
+      let res = new Date(utcGuess - off);
+      off = this._tzOffsetMs(res, tz);
+      return new Date(utcGuess - off);
+    },
+  };
+  const sched = Object.create(TeslaScheduler.prototype);
+  sched.app = app;
+  sched.homey = homey;
+  return sched;
+}
+
+test('venster sluit bij middernacht van dag 7 (kalenderdag), niet 144u vanaf nu', () => {
+  const sched = makeSchedulerWithTz();
+  // Zondag 16:13 lokaal (Europe/Amsterdam, zomertijd UTC+2) — het scenario uit de bug.
+  const now = Date.UTC(2026, 7, 16, 14, 13);   // 16-8-2026 14:13 UTC = 16:13 lokaal
+  const endMs = sched._oppWindowEndMs(now);
+  const endLocal = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Amsterdam', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).format(new Date(endMs));
+  assert.equal(endLocal, '2026-08-22, 00:00', 'venster sluit bij zaterdag 00:00 lokaal — sluit heel zaterdag uit');
+
+  // Een 144u-venster vanaf 16:13 zou tot zaterdag 16:13 lopen — ruim binnen zaterdag.
+  const oldStyleEnd = now + 144 * 3_600_000;
+  assert.ok(endMs < oldStyleEnd, 'kalenderdag-venster sluit eerder dan het oude 144u-venster');
+
+  // Slot om zaterdag 12:00 lokaal (10:00 UTC) hoort NIET in het venster.
+  const satNoon = Date.UTC(2026, 7, 22, 10, 0);
+  assert.ok(satNoon >= endMs, 'zaterdagmiddag valt buiten de zes genoemde dagen');
+  // Slot om vrijdag 23:00 lokaal hoort er WEL in.
+  const friLate = Date.UTC(2026, 7, 21, 21, 0);
+  assert.ok(friLate < endMs, 'vrijdagavond (dag 6) hoort nog in het venster');
+});

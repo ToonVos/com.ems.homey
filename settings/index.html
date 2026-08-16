@@ -12,7 +12,7 @@
       'pv_peak_kw', 'pv_peak_kw_l1', 'pv_peak_kw_l2', 'pv_peak_kw_l3',
       'pv_l1_peak_hour', 'pv_l2_peak_hour', 'pv_l3_peak_hour',
       'bat_capacity_kwh', 'bat_max_charge_w', 'bat_max_discharge_w',
-      'hp_offset_deg', 'ev_capacity_kwh', 'ev_default_soc', 'ev_floor_soc', 'ev_opportunistic_soc', 'ev_vacation_soc', 'ev_hold_horizon_h', 'ev_opportunistic_window_h', 'surplus_threshold',
+      'hp_offset_deg', 'ev_capacity_kwh', 'ev_default_soc', 'ev_floor_soc', 'ev_opportunistic_soc', 'ev_vacation_soc', 'ev_hold_horizon_h', 'ev_opportunistic_window_days', 'surplus_threshold',
       'ev_max_current_a', 'ev_min_current_a', 'ev_fixed_current_a', 'ev_target_import_w',
       'ev_peak1_start', 'ev_peak1_end', 'ev_peak2_start', 'ev_peak2_end',
       'ev_night_start', 'ev_night_end', 'ev_bat_night_min_soc',
@@ -31,7 +31,7 @@
       'pv_peak_kw', 'pv_peak_kw_l1', 'pv_peak_kw_l2', 'pv_peak_kw_l3',
       'pv_l1_peak_hour', 'pv_l2_peak_hour', 'pv_l3_peak_hour',
       'bat_capacity_kwh', 'bat_max_charge_w', 'bat_max_discharge_w',
-      'hp_offset_deg', 'ev_capacity_kwh', 'ev_default_soc', 'ev_floor_soc', 'ev_opportunistic_soc', 'ev_vacation_soc', 'ev_hold_horizon_h', 'ev_opportunistic_window_h', 'surplus_threshold',
+      'hp_offset_deg', 'ev_capacity_kwh', 'ev_default_soc', 'ev_floor_soc', 'ev_opportunistic_soc', 'ev_vacation_soc', 'ev_hold_horizon_h', 'ev_opportunistic_window_days', 'surplus_threshold',
       'ev_charge_mode', 'ev_max_current_a', 'ev_min_current_a', 'ev_fixed_current_a', 'ev_target_import_w',
       'ev_peak1_start', 'ev_peak1_end', 'ev_peak2_start', 'ev_peak2_end',
       'ev_night_charge', 'ev_night_start', 'ev_night_end', 'ev_bat_night_min_soc',
@@ -789,9 +789,9 @@
           </div>
           <div class="row2">
             <div class="field">
-              <label>Opportunistisch venster (uur)</label>
-              <input type="number" id="ev_opportunistic_window_h" value="144" min="24" max="168" />
-              <p class="hint">Hoe ver vooruit gekeken wordt voor de beste koop (default 144u = 6 dagen). Zes dagen vangt zowel zaterdag als zondag af: je kijkt in beide gevallen tot en met vrijdag, zonder een goed zondagsdal te laten liggen voor een zaterdag die je nooit haalt. Geen weeklimiet meer — twee dagen achter elkaar bijladen mag, mits je ertussendoor gereden hebt.</p>
+              <label>Opportunistisch venster (dagen)</label>
+              <input type="number" id="ev_opportunistic_window_days" value="6" min="2" max="14" />
+              <p class="hint">Hoeveel kalenderdagen vooruit gekeken wordt voor de beste koop, inclusief vandaag (default 6). Kalenderdagen, geen uren: vandaag is dag 1, het venster sluit bij middernacht aan het begin van dag 7 — dus altijd precies 6 hele dagen, ongeacht hoe laat het nu is. Geen weeklimiet meer — twee dagen achter elkaar bijladen mag, mits je ertussendoor gereden hebt.</p>
             </div>
           </div>
           <div class="row2">

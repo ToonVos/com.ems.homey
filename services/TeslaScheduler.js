@@ -230,6 +230,19 @@ class TeslaScheduler {
    * verschil dus bewust losgelaten — een verstreken eenmalige opdracht dwingt de
    * planner niet eindeloos verder op een niet-standaard percentage.
    */
+  /**
+   * Einde van het opportunistische venster: lokale middernacht aan het begin van dag
+   * (vandaag + `ev_opportunistic_window_days`, default 6) — kalenderdagen, geen uren.
+   * Vandaag telt als dag 1: bij 6 dagen sluit het venster dus bij het begin van dag 7,
+   * wat die dag volledig uitsluit ongeacht hoe laat de tick draait (zie aanroepplek).
+   */
+  _oppWindowEndMs(nowMs) {
+    const tz = this.homey.clock.getTimezone() || 'Europe/Amsterdam';
+    const days = Math.max(1, Math.round(this.homey.settings.get('ev_opportunistic_window_days') ?? 6));
+    const P = this.app._tzParts(new Date(nowMs), tz);
+    return this.app._zonedWallToUtc(+P.year, +P.month, +P.day + days, 0, 0, tz).getTime();
+  }
+
   async _expireOverride() {
     const dl = this.homey.settings.get('tesla_deadline_iso');
     const pct = this.homey.settings.get('tesla_target_pct');
@@ -735,19 +748,20 @@ class TeslaScheduler {
 
       // Opportunistisch tot plafond (≤85%), excl. de al verplicht gekozen slots.
       //
-      // Venster = zes dagen vooruit (`ev_opportunistic_window_h`, default 144u), niet de
-      // volle 168u-horizon. Reden: het gaat om de vraag "is dit de beste koop tot en met
-      // komende vrijdag". Kijk je op zondag zeven dagen vooruit, dan telt de zaterdag
-      // erna mee en laat je een goed zondagsdal liggen voor een dag die je nooit haalt.
-      // Zes dagen vangt zaterdag én zondag correct af; alleen de verste (en meest
-      // onzekere) staart valt af.
+      // Venster = zes GENOEMDE (kalender)dagen, niet 144 uur vanaf dit moment. Vandaag
+      // telt als dag 1; het venster sluit bij lokale middernacht aan het begin van dag 7.
+      // Draait de tick 's middags, dan zou een uren-venster van 144u nog een flink stuk
+      // van de 7e dag meepakken (bv. zondagmiddag → tot en met zaterdagmiddag) — daarmee
+      // telt die 7e dag alsnog mee als koopmoment terwijl het geen van de zes genoemde
+      // dagen is. Kalenderdag-tellen sluit die dag altijd volledig uit, ongeacht het
+      // tijdstip van de tick.
       //
       // Géén weeklock meer. De rem is niet de kalender maar de SoC-ruimte: heb je
       // zaterdag naar 85% geladen en de auto daarna leeggereden, dan hoor je zondag
       // opnieuw te kunnen profiteren van een dal. Staat hij nog vol, dan is er niets te
       // laden en gebeurt er vanzelf niets.
-      const oppWindowMs = (this.homey.settings.get('ev_opportunistic_window_h') ?? 144) * 3_600_000;
-      const oppWin      = fullWin.filter(h => h.t < now + oppWindowMs);
+      const oppWindowEndMs = this._oppWindowEndMs(now);
+      const oppWin      = fullWin.filter(h => h.t < oppWindowEndMs);
       const fromOpp     = Math.max(soc, mandatory);
       const need2       = soc < ceiling ? Math.max(0, (ceiling - fromOpp) / 100 * cap) / EFFICIENCY : 0;
       // AANEENGESLOTEN-bewust (net als de verplichte vulling en Fase 0): met
