@@ -1,23 +1,32 @@
 # Sync- & bijdrageplan: fork → hoofdrepo
 
-> Status: **voorbereiding, niets uitgevoerd.** Opgesteld 25 jun 2026.
+> Status: **voorbereiding, niets uitgevoerd.** Opgesteld 25 jun 2026,
+> **geactualiseerd 3 jul 2026** (divergentie hergemeten, nieuwe upstream-overlap
+> §1b, nieuwe fork-blokken P13–P15).
 > Eigenaarschap-/licentie-/naamkwesties (BUSL-1.1, `com.ultimate.ems`) worden
 > apart met Menno beslecht en zijn hier alleen als *afhankelijkheid* genoemd.
 
-## 0. Uitgangssituatie
+## 0. Uitgangssituatie (per 3 jul 2026)
 
 | | |
 |---|---|
 | Fork (origin) | `ToonVos/com.ems.homey` |
-| Hoofdrepo (upstream) | `b2hvty299s-ux/com.ems.homey` |
+| Hoofdrepo (upstream) | `b2hvty299s-ux/com.ems.homey` (v1.6.32, `com.ultimate.ems`, BUSL-1.1) |
 | Merge-base | `6a97680` |
-| Divergentie | fork **83 commits vóór**, upstream **27 commits áchter** |
-| Lokale `main` vs `origin/main` | **11 ahead, ongepusht** |
+| Divergentie | fork **101 commits vóór**, upstream **70 commits áchter** |
 
 **Upstream-veranderingen sinds split (kort):** licentie MIT → **BUSL-1.1**;
 app-ID rename → **`com.ultimate.ems`** ("Ultimate EMS"); multi-PV-omvormers +
 per-inverter fase-toewijzing; `AutonomousBattery`-interface + adapter; dual-thumb
 SoC-slider; bug-report-knop; Tibber kwartierdata; diverse fixes.
+
+**Nieuw sinds 25 jun (upstream, ~43 commits):** price-curve EV-laden in
+`solar_and_grid` (`e25a85f`); PBTH-kwartierprijzen + volledige capabilities
+(`6694f19`, `7294d59`); EMS ring-buffer-log + logviewer in settings (`af5a9d7`);
+zero-export P1 closed-loop + PV-curtailment redesign (`d122b81`, `6c50ed9`);
+Zendure local adapter + EV-priority battery headroom (`aeadbce`); API-inputvalidatie
+(`9a885e8`); diverse fixes (spike-filter verwijderd, `ev_home`-semantiek,
+`_detectBatteryType` retry).
 
 **Werkwijze (vast):** (1) eerst fork syncen met upstream, (2) daarna kleine PR's
 per onderwerp. Geen big-bang merge van 83 commits.
@@ -49,6 +58,18 @@ de merge.
 read-only)** overlapt met upstream `ef3dd4b` **`AutonomousBattery`-interface +
 adapter**. Bij sync: upstream-abstractie als basis nemen, onze read-only-garantie
 (P2: Nexus nooit aansturen) eroverheen borgen i.p.v. onze eigen variant ernaast.
+
+## 1b. Nieuwe conceptuele overlap (upstream sinds 25 jun)
+
+Menno bouwde intussen zélf functionaliteit die met onze blokken overlapt. Dit
+verandert de framing van drie PR-thema's van "nieuw" naar "uitbreiding van wat
+er al is" — cruciaal voor acceptatiekans:
+
+| Fork-blok | Upstream-equivalent | Consequentie voor de PR |
+|---|---|---|
+| P2 prijs-providers (PbtH/EnergyZero) | PBTH-kwartierprijzen + capabilities (`6694f19`, `7294d59`) | PbtH-deel grotendeels vervallen; alleen EnergyZero-fullday en EpexPredictor-multiday als aanvulling aanbieden. |
+| P3 Tesla-scheduler (prijsregie) | price-curve EV-laden in `solar_and_grid` (`e25a85f`) | Positioneren als **verdieping**: slot-planning met C_session, laadtijd-leermodel, wake-discipline, laadlimiet-als-stop — niet als concurrerende prijsmodus. Eerst met Menno afstemmen hoe dit zich tot zijn price-curve verhoudt. |
+| P1 beslis-log (`DecisionLog`) | EMS ring-buffer-log + logviewer (`af5a9d7`) | Aanbieden als persistente JSONL-laag bovenop/naast zijn ring-buffer, of samenvoegen tot één log-architectuur. Overleg vóór code. |
 
 ---
 
@@ -88,18 +109,33 @@ houden. Volgorde = afhankelijkheid (laag eerst). Clusters uit de 83 commits:
 | P10 | Widget-robuustheid (retry/fitHeight/diagnostics) | `5aeab37 5c24577 67d4490 6d47077 e94e3f8` | klein | P4 |
 | P11 | Notificaties/tijdlijn-categorieën | `d16334f dc90680` | klein | — |
 | P12 | Settings-UI opruiming | `8ab6cd6 7b1a094 d05cfb2 6799a16 09d143b` | midden | merge §1 |
+| P13 | Aging-premie (d10) + uurprijs-toggle + wake-betrouwbaarheid | `7d057a7 f6b9424` | midden | P3 |
+| P14 | Observe-only meetlaag + bron-attributie (d11): `startObserver()`, EnergyLedger-attributie, accu-mix, levende deficit-drempel, chunk-endpoint | `a3af220 6ec5b75 7bfe113` | **groot** | P7 |
+| P15 | Vijf dashboard-widgets (energiestromen, dagcurve+totalen, beslis-tijdlijn, waarom-nu, besparing) | `cc25e28 60af9f9 8128635 a8856b9 3c502a1` | groot | P14, P1 |
+| P16 | Slot-optimalisatie O(n·N) + unit-tests (`test/slotSelection.test.js`) + sessiekost-fix | `3af4e38 f6b9424 60c3c28` | midden | P3 |
+| P17 | Algemene flow-triggers dumplast/batterij-fallback + getSettings-endpoint | `b6cd33f 8155073` | klein | — |
 
 **Niet naar upstream:** fork-setup/meta (`daaf5a7` FORK.md, package-lock-bumps,
-versie-bumps, dode-code-removals tenzij relevant) en pure docs die fork-specifiek
-zijn. Module-2 dry-run (`bab4531` e.d.) was steiger — niet meesturen.
+versie-bumps, dode-code-removals tenzij relevant), graphify-tooling
+(`3b634d5 8bacab0` — dev-tooling, hooguit apart aanbieden als hij wil) en pure
+docs die fork-specifiek zijn. Module-2 dry-run (`bab4531` e.d.) was steiger —
+niet meesturen.
 
-**Eerst klein bewijzen:** begin met **P1 + P11 + P10** (klein, laag risico) om de
-PR-pijplijn met Menno te beproeven, dan de grote (P2/P3/P7).
+**Eerst klein bewijzen:** begin met **P11 + P10 + P17** (klein, laag risico,
+géén conceptuele overlap) om de PR-pijplijn met Menno te beproeven. Daarna P16
+(tests mee = makkelijk te reviewen). P1/P2/P3 pas ná het overlap-gesprek (§1b);
+de grote onderscheidende blokken (P7 boekhouding, P14 meetlaag, P15 widgets)
+daarna in die volgorde.
 
 ---
 
 ## 4. Open afhankelijkheden (Menno)
 
-- Licentie: MIT vs BUSL-1.1 — bepaalt of bijdragen juridisch kan/mag.
-- App-ID/naam: blijven we `com.ultimate.ems` volgen of niet.
+- Licentie: MIT vs BUSL-1.1 — bepaalt of bijdragen juridisch kan/mag. Upstream
+  is inmiddels definitief BUSL-1.1 (licensor MSDB Holding BV) — vóór de eerste
+  PR moet helder zijn onder welke voorwaarden onze bijdragen worden opgenomen
+  (zie intentieovereenkomst-traject in de brein-repo).
+- App-ID/naam: upstream is `com.ultimate.ems` v1.6.32; fork volgt nog het oude ID.
 - Volgorde/cadans van PR-review aan upstream-kant.
+- Overlap-gesprek §1b: price-curve vs TeslaScheduler, ring-buffer vs DecisionLog —
+  architectuurkeuze samen maken vóórdat we die PR's opsturen.
