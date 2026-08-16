@@ -981,7 +981,16 @@ class TeslaScheduler {
       }
       // De auto reguleert zichzelf op de limiet (zelf-pauze bij bereiken = `actual:false`): dat is
       // GEEN mismatch om te corrigeren. Eén keer inschakelen (eerste start), daarna met rust laten.
-      const carMaintaining = want2 && actual === false && reached && this._lastSentWant === true;
+      //
+      // LET OP: dit mag alleen gelden als de SoC ÉCHT op/boven de limiet staat (`atCap`, geen
+      // tolerantie) — niet bij de tolerante `reached` (capPct−1). Een auto stopt zelf bij het
+      // bereiken van de limiet, maar hervat NIET vanzelf zodra vampire drain de SoC daaronder
+      // laat zakken; dat vergt een vers start-commando. Met de tolerante `reached` bleef de auto
+      // hier vastzitten (5 uur, 0 commando's, SoC 59% tegen limiet 60%): elke tick concludeerde
+      // "carMaintaining", nooit een start. `atCap` sluit dat gat zonder de rust-classificatie
+      // (die wél op de tolerantie mag leunen — daar gaat het om chase-de-laatste-procenten) te raken.
+      const atCap       = soc >= capPct;
+      const carMaintaining = want2 && actual === false && atCap && this._lastSentWant === true;
       // actual===null = bat-device offline (auto slaapt). Bij want2=true: altijd mismatch —
       // we weten niet of de auto laadt en moeten het commando opnieuw sturen (met wake).
       // Bij want2=false: vertrouw _lastSentWant (stop-commando hoeft niet herhaald bij onbekende staat).

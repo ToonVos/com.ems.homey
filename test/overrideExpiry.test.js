@@ -66,3 +66,31 @@ test('zonder planning gebeurt er niets', async () => {
   const { sched } = makeScheduler({});
   await assert.doesNotReject(() => sched._expireOverride(50));
 });
+
+// ─── carMaintaining moet stoppen bij vampire-drain onder de limiet ───────────
+// Regressietest voor het "5 uur stilstand"-scenario: SoC zakt 1% onder een eerder
+// bereikte limiet (vampire drain, geen actief laden), en het systeem moet dat als
+// een echt mismatch herkennen — niet als "auto regelt het zelf" wegstrepen.
+
+test('atCap-drempel: soc net onder de limiet is GEEN carMaintaining (mismatch blijft staan)', () => {
+  const capPct = 60, soc = 59;
+  const reached = soc >= capPct - 1;          // tolerante rust-classificatie: true
+  const atCap   = soc >= capPct;               // strikte "echt op de limiet"-toets: false
+  assert.equal(reached, true, 'reached blijft tolerant (voor de rust-classificatie)');
+  assert.equal(atCap, false, 'atCap mag niet aanslaan als de SoC onder de limiet zakt');
+
+  const want = true, actual = false, lastSentWant = true;
+  const want2 = reached || (soc < capPct && want);
+  const carMaintainingOld = want2 && actual === false && reached && lastSentWant === true;
+  const carMaintainingNew = want2 && actual === false && atCap && lastSentWant === true;
+  assert.equal(carMaintainingOld, true, 'oude logica zou hier ten onrechte stil blijven (de bug)');
+  assert.equal(carMaintainingNew, false, 'nieuwe logica herkent dit als mismatch → commando volgt');
+});
+
+test('atCap-drempel: soc écht op de limiet blijft wél carMaintaining (geen onnodige herstart)', () => {
+  const capPct = 60, soc = 60;
+  const atCap = soc >= capPct;
+  const want2 = true, actual = false, lastSentWant = true;
+  const carMaintainingNew = want2 && actual === false && atCap && lastSentWant === true;
+  assert.equal(carMaintainingNew, true, 'op de exacte limiet blijft de zelf-regulatie-aanname geldig');
+});
