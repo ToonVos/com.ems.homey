@@ -26,7 +26,7 @@
 
     var BEHAVIOR_KEYS = [
       'contract_type', 'price_import', 'price_export',
-      'day_ahead_provider', 'day_ahead_api_key',
+      'day_ahead_provider', 'day_ahead_api_key', 'pbth_app_device_id',
       'phases', 'max_amps',
       'pv_peak_kw', 'pv_peak_kw_l1', 'pv_peak_kw_l2', 'pv_peak_kw_l3',
       'pv_l1_peak_hour', 'pv_l2_peak_hour', 'pv_l3_peak_hour',
@@ -570,13 +570,17 @@
       <div id="dynamic-fields" style="display:none">
         <label>Prijsprovider</label>
         <select id="day_ahead_provider">
-          <option value="nordpool">Nord Pool (kwartierprijzen vandaag+morgen, geen key — aanbevolen)</option>
-          <option value="energyzero">EnergyZero (uurprijzen vandaag+morgen, geen key)</option>
-          <option value="pbth">Power by the Hour (Stroomprijzen-device, 8u)</option>
+          <option value="nordpool">Nord Pool (kale kwartierprijzen vandaag+morgen, geen key — aanbevolen)</option>
+          <option value="energyzero">EnergyZero (kale uurprijzen vandaag+morgen, geen key)</option>
+          <option value="pbth-app">Power by the Hour — device-koppeling (jouw eigen dap15-device, incl. diens markup)</option>
+          <option value="pbth">Power by the Hour — losse capabilities (Stroomprijzen-device, 8u)</option>
           <option value="entso-e">ENTSO-E (eigen API key)</option>
           <option value="tibber">Tibber</option>
         </select>
-        <p class="hint">Sinds 1-10-2025 is de EPEX-eenheid een <b>kwartier</b>. Alleen Nord Pool levert die 96 prijzen per dag; EnergyZero kent nog uitsluitend uurprijzen. Zet hieronder bij <b>Prijs-eenheid</b> welke eenheid jouw leverancier daadwerkelijk afrekent.</p>
+        <p class="hint">Sinds 1-10-2025 is de EPEX-eenheid een <b>kwartier</b>. Alleen Nord Pool levert die 96 prijzen per dag; EnergyZero kent nog uitsluitend uurprijzen. Zet hieronder bij <b>Prijs-eenheid</b> welke eenheid jouw leverancier daadwerkelijk afrekent.
+        <br>Voorkeursregel: <b>kale (netto) prijs + onze eigen tarief-componenten hieronder</b> heeft altijd de voorkeur boven een bron die zelf al een all-in prijs teruggeeft — Nord Pool/EnergyZero geven kale prijzen, dus die blijven aanbevolen. De PbtH-device-koppeling geeft geen kale prijs terug, alleen het al-in resultaat ván dát device met de markup die daar zelf is ingesteld; dat resultaat wordt dan 1-op-1 overgenomen zónder de tarief-componenten hieronder nogmaals toe te passen — hou dus die twee configuraties (hier én in het PbtH-device) zelf gelijk. Let op: de tarief-componenten hieronder blijven wél gebruikt voor de meerdaagse vooruitblik (dag 2 t/m 7), die altijd op de kale EpexPredictor-forecast draait, ongeacht deze providerkeuze — dus nooit leegmaken.</p>
+        <label>PbtH-device (optioneel; alleen bij providerkeuze "PbtH — device-koppeling" én bij meerdere gepairde prijs-devices)</label>
+        <input type="text" id="pbth_app_device_id" placeholder="leeg = eerste dap15-device (bv. NL_Netherlands)" />
         <label>API key</label>
         <input type="text" id="day_ahead_api_key" placeholder="Vereist voor Tibber, leeg voor ENTSO-E" />
 

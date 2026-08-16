@@ -118,21 +118,37 @@ class PricePredictor {
   actualStepMs() { return this._actualStep || HOUR; }
 
   /**
-   * Echte marktprijzen (vandaag + morgen, morgen na ~13:00 CET gepubliceerd).
-   * Twee keyless providers, beide kale €/kWh → all-in via `priceParams()`:
-   *   'nordpool'   — Nord Pool DataPortal, **kwartierprijzen** (96/dag, EPEX 15-min MTU)
-   *   'energyzero' — EnergyZero, uurprijzen (interval=4; kent géén 15-min-interval)
+   * Echte marktprijzen (vandaag + morgen, morgen na ~13:00 CET gepubliceerd). Drie
+   * keyless providers:
+   *   'pbth-app'   — Power by the Hour (com.gruijter.powerhour) app-to-app-API, ons
+   *                  eigen geconfigureerde device (bv. Zonneplan-tarief). Levert al-in
+   *                  prijzen (markup al toegepast in dát device) — GEEN eigen
+   *                  priceParams()-markup meer overheen, anders dubbel geteld.
+   *   'nordpool'   — Nord Pool DataPortal, kale €/MWh, **kwartierprijzen** (96/dag,
+   *                  EPEX 15-min MTU) → all-in via `priceParams()`.
+   *   'energyzero' — EnergyZero, kale €/kWh, uurprijzen (interval=4; kent géén
+   *                  15-min-interval) → all-in via `priceParams()`.
    * Geeft een Map(slotStartMs → all-in €/kWh) op de resolutie van `actualStepMs()`,
    * of null als de provider geen actuals levert. Cache 1u.
    */
   async getActualPrices() {
     const provider = this.homey.settings.get('day_ahead_provider') || '';
-    if (provider !== 'energyzero' && provider !== 'nordpool') return null;
+    if (!['pbth-app', 'energyzero', 'nordpool'].includes(provider)) return null;
     const now = Date.now();
     if (this._ezMap && this._ezProvider === provider && (now - this._ezAt) < 60 * 60 * 1000) {
       return this._ezMap;
     }
     try {
+      if (provider === 'pbth-app') {
+        const { map, step } = await this._fetchPbthAppMap();
+        if (!map.size) throw new Error('geen prijzen ontvangen');
+        this._ezMap = map; this._ezAt = now;
+        this._ezProvider = provider; this._actualStep = step;
+        this.app.log(`[PricePredictor] pbth-app actuals: ${map.size} `
+          + `${step === QUARTER ? 'kwartieren' : 'uren'} (vandaag+morgen, al-in)`);
+        return map;
+      }
+
       const raw = provider === 'nordpool'
         ? await this._fetchNordpoolRaw(now)
         : await this._fetchEnergyZeroRaw(now);
@@ -153,6 +169,36 @@ class PricePredictor {
       this.app.error(`[PricePredictor] ${provider}-fout:`, err.message);
       return (this._ezProvider === provider && this._ezMap) || null;   // val terug op laatste bekende
     }
+  }
+
+  /**
+   * Power by the Hour app-to-app-API: `getApiApp('com.gruijter.powerhour').get('/dap-prices')`.
+   * Geeft ALLE gepairde dap/dap15/dapg-devices met hun volledige toekomstige slot-array
+   * (device.prices, incl. de door de gebruiker ingestelde markup — al-in `importPrice`).
+   * Wij pakken specifiek het device dat `pbth_app_device_id` aanwijst (default: het eerst
+   * gevonden 15-min NL-device), zodat een gebruiker met meerdere PbtH-devices (bv. ook
+   * gas) niet per ongeluk de verkeerde als stroomprijs gebruikt.
+   */
+  async _fetchPbthAppMap() {
+    const apiApp = this.homey.api.getApiApp('com.gruijter.powerhour');
+    const payload = await apiApp.get('/dap-prices');
+    const entries = payload?.prices || [];
+    if (!entries.length) throw new Error('PbtH-app gaf geen devices terug');
+
+    const wantId = this.homey.settings.get('pbth_app_device_id') || '';
+    const entry = (wantId && entries.find(e => e.deviceId === wantId))
+      || entries.find(e => e.driverType === 'dap15')
+      || entries[0];
+    if (!entry?.slots?.length) throw new Error(`geen prijzen voor device ${entry?.deviceName || '?'}`);
+
+    const step = (entry.priceInterval || 60) * 60_000;
+    const map = new Map();
+    for (const s of entry.slots) {
+      const t = new Date(s.time).getTime();
+      if (!isFinite(t) || typeof s.importPrice !== 'number') continue;
+      map.set(Math.floor(t / step) * step, +s.importPrice.toFixed(5));
+    }
+    return { map, step };
   }
 
   /**
