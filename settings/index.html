@@ -553,7 +553,7 @@
       <label>Type contract</label>
       <select id="contract_type">
         <option value="fixed">Vast tarief</option>
-        <option value="dynamic">Dynamisch (uurprijzen)</option>
+        <option value="dynamic">Dynamisch (uur- of kwartierprijzen)</option>
       </select>
       <div id="fixed-fields">
         <div class="row2">
@@ -570,11 +570,13 @@
       <div id="dynamic-fields" style="display:none">
         <label>Prijsprovider</label>
         <select id="day_ahead_provider">
-          <option value="energyzero">EnergyZero (volledige uurprijzen vandaag+morgen, geen key — aanbevolen)</option>
+          <option value="nordpool">Nord Pool (kwartierprijzen vandaag+morgen, geen key — aanbevolen)</option>
+          <option value="energyzero">EnergyZero (uurprijzen vandaag+morgen, geen key)</option>
           <option value="pbth">Power by the Hour (Stroomprijzen-device, 8u)</option>
           <option value="entso-e">ENTSO-E (eigen API key)</option>
           <option value="tibber">Tibber</option>
         </select>
+        <p class="hint">Sinds 1-10-2025 is de EPEX-eenheid een <b>kwartier</b>. Alleen Nord Pool levert die 96 prijzen per dag; EnergyZero kent nog uitsluitend uurprijzen. Zet hieronder bij <b>Prijs-eenheid</b> welke eenheid jouw leverancier daadwerkelijk afrekent.</p>
         <label>API key</label>
         <input type="text" id="day_ahead_api_key" placeholder="Vereist voor Tibber, leeg voor ENTSO-E" />
 
@@ -806,10 +808,10 @@
           <!-- Prijs-granulariteit -->
           <label style="margin-top:12px">Prijs-eenheid</label>
           <select id="ev_price_granularity">
-            <option value="quarter">Kwartierprijzen — EPEX 15-min (sinds 1-10-2025)</option>
-            <option value="hourly">Uurprijzen — 4 kwartieren gemiddeld (o.a. Zonneplan)</option>
+            <option value="quarter">Kwartierprijzen — EPEX 15-min (sinds 1-10-2025, o.a. Zonneplan)</option>
+            <option value="hourly">Uurprijzen — 4 kwartieren gemiddeld</option>
           </select>
-          <p class="hint">Kies de eenheid waarop jouw leverancier <b>afrekent</b>. Zonneplan blijft bewust op uurprijzen (gemiddelde van de 4 kwartieren). Op 'uurprijzen' plant de EMS per uur, zodat hij niet binnen een uur fragmenteert (schijn-winst + extra wake-kosten). Standaard: kwartierprijzen.</p>
+          <p class="hint">Kies de eenheid waarop jouw leverancier <b>afrekent</b>. Zonneplan is meegegaan naar kwartier-afrekening; kies dan 'kwartierprijzen' én Nord Pool als provider, anders plant de EMS op een gemiddelde dat je niet betaalt. Op 'uurprijzen' plant de EMS per uur, zodat hij niet binnen een uur fragmenteert (schijn-winst + extra wake-kosten). Standaard: kwartierprijzen.</p>
 
           <!-- Laadstrategie -->
           <h3>Laadstrategie</h3>

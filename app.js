@@ -270,6 +270,18 @@ class EmsApp extends Homey.App {
     await this.ems.init();
     await this.flows.init();
 
+    // Eenmalige migratie: EnergyZero kent alleen uurprijzen, terwijl de EPEX-eenheid
+    // sinds 1-10-2025 een kwartier is en leveranciers (Zonneplan) meegaan naar
+    // kwartier-afrekening. Nord Pool levert diezelfde prijzen op 15-min zonder key
+    // (uurgemiddelde identiek aan EnergyZero, geverifieerd), dus overzetten.
+    if (!this.homey.settings.get('migrated_quarter_prices')) {
+      if ((this.homey.settings.get('day_ahead_provider') || '') === 'energyzero') {
+        this.homey.settings.set('day_ahead_provider', 'nordpool');
+        this.log('[EMS] migratie: prijsprovider EnergyZero → Nord Pool (kwartierprijzen)');
+      }
+      this.homey.settings.set('migrated_quarter_prices', true);
+    }
+
     // Meerdaagse prijs-pipeline (EpexPredictor, read-only). Vóór DecisionLog
     // zodat de log de prijs-samenvatting kan meenemen.
     this.pricePredictor = new PricePredictor(this);
@@ -280,6 +292,11 @@ class EmsApp extends Homey.App {
     this.homey.settings.on('set', (key) => {
       if (key === 'contract_type') {
         this.log(`[EMS] contract_type → ${this.homey.settings.get('contract_type')}`);
+        this.pricePredictor?.refreshNow?.();
+      } else if (key === 'day_ahead_provider') {
+        // Andere bron = andere resolutie (Nord Pool kwartier vs EnergyZero uur);
+        // de actuals-cache houdt anders tot een uur de óude bron vast.
+        this.log(`[EMS] prijsprovider → ${this.homey.settings.get('day_ahead_provider')}`);
         this.pricePredictor?.refreshNow?.();
       } else if (key.startsWith('price_')) {
         // Prijs-componenten (btw, energiebelasting, opslag, exportbonus) gewijzigd:

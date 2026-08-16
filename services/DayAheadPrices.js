@@ -6,6 +6,7 @@
  * Fetches day-ahead electricity prices for dynamic contract users.
  *
  * Providers supported:
+ *   'nordpool' — Nord Pool DataPortal, 15-min MTU (no key; averaged to hours here)
  *   'entso-e'  — Free ENTSO-E Transparency Platform API (requires API key)
  *   'tibber'   — Tibber GraphQL API (requires API key)
  *   'entsoe-nl' — Dutch APX prices via open proxy (no key needed)
@@ -54,6 +55,8 @@ class DayAheadPrices {
       let raw;
       if (this._provider === 'pbth') {
         raw = await this._fetchPbth();
+      } else if (this._provider === 'nordpool') {
+        raw = await this._fetchNordpool();
       } else if (this._provider === 'energyzero') {
         raw = await this._fetchEnergyZero();
       } else if (this._provider === 'tibber') {
@@ -89,6 +92,43 @@ class DayAheadPrices {
     }
     if (prices.length === 0) throw new Error('Stroomprijzen-device gaf geen prijzen');
     return prices;
+  }
+
+  // ─── Nord Pool fetch (kwartierprijzen, geen key) ───────────────────────────
+
+  /**
+   * Nord Pool DataPortal levert NL day-ahead op 15-min-MTU. Deze klasse werkt per
+   * definitie met 24 uurvakken (`_annotate` → isCheap/isExpensive per uur), dus de
+   * vier kwartieren worden hier gemiddeld. De kwartier-resolutie zelf wordt gebruikt
+   * door `PricePredictor.getActualPrices()`, waar de EV-planner op draait.
+   */
+  async _fetchNordpool() {
+    const tz  = this.homey.clock.getTimezone();
+    const ymd = d => new Intl.DateTimeFormat('en-CA',
+      { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+    const url = 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices'
+      + `?date=${ymd(new Date(Date.now() + 24 * 60 * 60 * 1000))}`
+      + '&market=DayAhead&deliveryArea=NL&currency=EUR';
+
+    const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
+    if (!res.ok) throw new Error(`Nord Pool HTTP ${res.status}`);
+    const data = await res.json();
+
+    const byHour = new Map();
+    for (const e of data.multiAreaEntries || []) {
+      const mwh = e.entryPerArea?.NL;
+      if (typeof mwh !== 'number') continue;
+      const hour = Number(new Intl.DateTimeFormat('en-GB',
+        { timeZone: tz, hour: '2-digit', hourCycle: 'h23' }).format(new Date(e.deliveryStart)));
+      if (!byHour.has(hour)) byHour.set(hour, []);
+      byHour.get(hour).push(mwh / 1000);                    // €/MWh → kale €/kWh
+    }
+    if (!byHour.size) throw new Error('Nord Pool gaf geen prijzen');
+
+    return [...byHour.entries()].map(([hour, q]) => ({
+      hour,
+      price: +((q.reduce((a, b) => a + b, 0) / q.length) * 1.21 + 0.13085).toFixed(5),  // all-in
+    }));
   }
 
   // ─── EnergyZero fetch (volledige uur-reeks vandaag+morgen, geen key) ────────

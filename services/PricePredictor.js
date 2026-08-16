@@ -16,6 +16,11 @@
  *                                  export = (kale_€/kWh + 0,02) × 1,10
  *
  * Read-only: alleen ophalen + rekenen. Cache 6u. API: getPriceHorizon.
+ *
+ * Actuals (D+0/D+1) komen apart binnen via `getActualPrices()`. Sinds de EPEX-MTU
+ * per 1-10-2025 op 15 min staat en Zonneplan meegaat naar kwartier-afrekening is
+ * Nord Pool de voorkeursbron: die levert de 96 kwartierprijzen per dag zonder key.
+ * EnergyZero blijft beschikbaar maar kent alleen uurprijzen (geen 15-min-interval).
  */
 
 const fs   = require('fs');
@@ -35,6 +40,9 @@ const DEF_ENERGY_TAX_EUR = 0.1108;    // energiebelasting 2026 incl. btw (€/kW
 const DEF_SUPPLIER_FEE_EUR = 0.0199892; // Zonneplan inkoopvergoeding/opslag 2026 incl. btw (€/kWh)
 const DEF_EXPORT_BONUS_EUR = 0.02;    // Zonneplan Sunbonus (€/kWh)
 const DEF_EXPORT_FACTOR  = 1.10;      // Zonneplan +10% terugleverbonus
+
+const QUARTER = 900_000;              // EPEX-MTU sinds 1-10-2025
+const HOUR    = 3_600_000;
 
 class PricePredictor {
 
@@ -104,47 +112,110 @@ class PricePredictor {
   }
 
   /**
-   * Echte uur-prijzen (vandaag + morgen, na ~13:00 gepubliceerd) via EnergyZero.
-   * Alleen actief als day_ahead_provider === 'energyzero'. Geen API-key nodig.
-   * Geeft een Map(hourStartMs → all-in €/kWh), of null. Cache 1u.
+   * Resolutie (ms) van de laatst opgehaalde actuals: QUARTER bij Nord Pool,
+   * HOUR bij EnergyZero. De consument moet hiermee de sleutel afronden.
+   */
+  actualStepMs() { return this._actualStep || HOUR; }
+
+  /**
+   * Echte marktprijzen (vandaag + morgen, morgen na ~13:00 CET gepubliceerd).
+   * Twee keyless providers, beide kale €/kWh → all-in via `priceParams()`:
+   *   'nordpool'   — Nord Pool DataPortal, **kwartierprijzen** (96/dag, EPEX 15-min MTU)
+   *   'energyzero' — EnergyZero, uurprijzen (interval=4; kent géén 15-min-interval)
+   * Geeft een Map(slotStartMs → all-in €/kWh) op de resolutie van `actualStepMs()`,
+   * of null als de provider geen actuals levert. Cache 1u.
    */
   async getActualPrices() {
-    if ((this.homey.settings.get('day_ahead_provider') || '') !== 'energyzero') return null;
+    const provider = this.homey.settings.get('day_ahead_provider') || '';
+    if (provider !== 'energyzero' && provider !== 'nordpool') return null;
     const now = Date.now();
-    if (this._ezMap && (now - this._ezAt) < 60 * 60 * 1000) return this._ezMap;
+    if (this._ezMap && this._ezProvider === provider && (now - this._ezAt) < 60 * 60 * 1000) {
+      return this._ezMap;
+    }
     try {
-      // Ruim UTC-venster (gister t/m overmorgen) zodat "vandaag+morgen" lokale tijd
-      // er altijd volledig in valt, ongeacht zomertijd; de map is per uur gekeyd.
-      const ymd  = d => d.toISOString().substring(0, 10);
-      const from = new Date(now - 24 * 60 * 60 * 1000), till = new Date(now + 48 * 60 * 60 * 1000);
-      const url  = `https://api.energyzero.nl/v1/energyprices?fromDate=${ymd(from)}T00:00:00.000Z`
-                 + `&tillDate=${ymd(till)}T23:59:59.999Z&interval=4&usageType=1&inclBtw=false`;
-      const res  = await fetch(url, { signal: AbortSignal.timeout(12000) });
-      if (!res.ok) throw new Error(`EnergyZero HTTP ${res.status}`);
-      const data = await res.json();
-      const pr   = data.Prices || data.prices || [];
-      const HOUR = 3_600_000;
-      const P    = this.priceParams();
-      const map  = new Map();
-      for (const p of pr) {
-        const t = new Date(p.readingDate).getTime();
-        if (!isFinite(t) || typeof p.price !== 'number') continue;
-        map.set(Math.floor(t / HOUR) * HOUR, +(p.price * P.btw + P.energyTax + P.supplierFee).toFixed(5));
+      const raw = provider === 'nordpool'
+        ? await this._fetchNordpoolRaw(now)
+        : await this._fetchEnergyZeroRaw(now);
+      if (!raw.points.length) throw new Error('geen prijzen ontvangen');
+
+      const P   = this.priceParams();
+      const map = new Map();
+      for (const { t, kale } of raw.points) {
+        map.set(Math.floor(t / raw.step) * raw.step,
+          +(kale * P.btw + P.energyTax + P.supplierFee).toFixed(5));
       }
-      if (!map.size) throw new Error('geen prijzen ontvangen');
       this._ezMap = map; this._ezAt = now;
-      this.app.log(`[PricePredictor] EnergyZero actuals: ${map.size} uur (vandaag+morgen)`);
+      this._ezProvider = provider; this._actualStep = raw.step;
+      this.app.log(`[PricePredictor] ${provider} actuals: ${map.size} `
+        + `${raw.step === QUARTER ? 'kwartieren' : 'uren'} (vandaag+morgen)`);
       return map;
     } catch (err) {
-      this.app.error('[PricePredictor] EnergyZero-fout:', err.message);
-      return this._ezMap || null;   // val terug op laatste bekende
+      this.app.error(`[PricePredictor] ${provider}-fout:`, err.message);
+      return (this._ezProvider === provider && this._ezMap) || null;   // val terug op laatste bekende
     }
+  }
+
+  /**
+   * Nord Pool DataPortal — day-ahead NL op native 15-min-resolutie, geen API-key.
+   * Per leverdag één call (`deliveryDateCET`); morgen ontbreekt vóór de publicatie
+   * rond 13:00 CET en telt dan gewoon niet mee. Prijzen zijn kale €/MWh.
+   * Geverifieerd 16-08-2026: 96 punten/dag, uurgemiddelde identiek aan EnergyZero.
+   */
+  async _fetchNordpoolRaw(now) {
+    const tz  = this.homey.clock.getTimezone();
+    const ymd = d => new Intl.DateTimeFormat('en-CA',
+      { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+    const days = [new Date(now), new Date(now + 24 * 60 * 60 * 1000)];
+
+    const points = [];
+    for (const day of days) {
+      const url = 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices'
+        + `?date=${ymd(day)}&market=DayAhead&deliveryArea=NL&currency=EUR`;
+      let data;
+      try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        data = await res.json();
+      } catch (err) {
+        // Morgen nog niet gepubliceerd → geen fout, alleen een kortere horizon.
+        if (day !== days[0]) continue;
+        throw err;
+      }
+      for (const e of data.multiAreaEntries || []) {
+        const t    = new Date(e.deliveryStart).getTime();
+        const mwh  = e.entryPerArea?.NL;
+        if (!isFinite(t) || typeof mwh !== 'number') continue;
+        points.push({ t, kale: mwh / 1000 });          // €/MWh → €/kWh
+      }
+    }
+    return { step: QUARTER, points };
+  }
+
+  /** EnergyZero — volledige uurreeks, geen API-key. Kale €/kWh (`inclBtw=false`). */
+  async _fetchEnergyZeroRaw(now) {
+    // Ruim UTC-venster (gister t/m overmorgen) zodat "vandaag+morgen" lokale tijd
+    // er altijd volledig in valt, ongeacht zomertijd; de map is per uur gekeyd.
+    const ymd  = d => d.toISOString().substring(0, 10);
+    const from = new Date(now - 24 * 60 * 60 * 1000), till = new Date(now + 48 * 60 * 60 * 1000);
+    const url  = `https://api.energyzero.nl/v1/energyprices?fromDate=${ymd(from)}T00:00:00.000Z`
+               + `&tillDate=${ymd(till)}T23:59:59.999Z&interval=4&usageType=1&inclBtw=false`;
+    const res  = await fetch(url, { signal: AbortSignal.timeout(12000) });
+    if (!res.ok) throw new Error(`EnergyZero HTTP ${res.status}`);
+    const data = await res.json();
+    const points = [];
+    for (const p of (data.Prices || data.prices || [])) {
+      const t = new Date(p.readingDate).getTime();
+      if (!isFinite(t) || typeof p.price !== 'number') continue;
+      points.push({ t, kale: p.price });
+    }
+    return { step: HOUR, points };
   }
 
   /** Forceer een verse ophaalslag (bv. nadat contract op dynamisch is gezet). */
   async refreshNow() {
     this._fetchedAt = 0;
-    this._ezMap = null; this._ezAt = 0;   // ook de EnergyZero-uurcache met oude parameters weg
+    this._ezMap = null; this._ezAt = 0;   // ook de actuals-cache met oude parameters weg
+    this._ezProvider = null; this._actualStep = null;
     await this._refreshSafe();
   }
 
