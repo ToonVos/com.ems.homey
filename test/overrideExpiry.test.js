@@ -31,66 +31,51 @@ function makeScheduler({ targetPct, deadlineMs }) {
   return { sched, store };
 }
 
-test('verlopen planning vervalt zodra het doel gehaald is', async () => {
+test('verlopen planning vervalt puur op tijd, ongeacht of het doel gehaald is', async () => {
   const { sched, store } = makeScheduler({ targetPct: 60, deadlineMs: Date.now() - 2 * HOUR });
-  await sched._expireOverride(61);
+  await sched._expireOverride();
   assert.equal(store.has('tesla_target_pct'), false);
   assert.equal(store.has('tesla_deadline_iso'), false);
 });
 
-test('verlopen planning blijft staan zolang het doel niet gehaald is (SoC-garantie)', async () => {
-  const { sched, store } = makeScheduler({ targetPct: 60, deadlineMs: Date.now() - 2 * HOUR });
-  await sched._expireOverride(59);
-  assert.equal(store.get('tesla_target_pct'), 60);
-});
-
-test('onbereikbaar doel vervalt alsnog na 24u', async () => {
-  const { sched, store } = makeScheduler({ targetPct: 60, deadlineMs: Date.now() - 25 * HOUR });
-  await sched._expireOverride(59);
+test('vervalt ook vlak ná de deadline, zonder wachttijd', async () => {
+  const { sched, store } = makeScheduler({ targetPct: 60, deadlineMs: Date.now() - 1000 });
+  await sched._expireOverride();
   assert.equal(store.has('tesla_target_pct'), false);
 });
 
-test('toekomstige planning blijft ongemoeid, ook als het doel al gehaald is', async () => {
+test('toekomstige planning blijft ongemoeid', async () => {
   const { sched, store } = makeScheduler({ targetPct: 60, deadlineMs: Date.now() + 6 * HOUR });
-  await sched._expireOverride(80);
-  assert.equal(store.get('tesla_target_pct'), 60);
-});
-
-test('onbekende SoC telt niet als "doel gehaald"', async () => {
-  const { sched, store } = makeScheduler({ targetPct: 60, deadlineMs: Date.now() - 2 * HOUR });
-  await sched._expireOverride(null);
+  await sched._expireOverride();
   assert.equal(store.get('tesla_target_pct'), 60);
 });
 
 test('zonder planning gebeurt er niets', async () => {
   const { sched } = makeScheduler({});
-  await assert.doesNotReject(() => sched._expireOverride(50));
+  await assert.doesNotReject(() => sched._expireOverride());
 });
 
-// ─── carMaintaining moet stoppen bij vampire-drain onder de limiet ───────────
-// Regressietest voor het "5 uur stilstand"-scenario: SoC zakt 1% onder een eerder
-// bereikte limiet (vampire drain, geen actief laden), en het systeem moet dat als
-// een echt mismatch herkennen — niet als "auto regelt het zelf" wegstrepen.
+// ─── carMaintaining: tolerantie rond de limiet is BEWUST gedrag ──────────────
+// SoC net (~1-2%) onder de limiet door vampire drain hoeft geen nieuwe start-sessie
+// te triggeren — dat zou overgevoelig laden voor een verwaarloosbaar verschil zijn.
+// (Was hier kort op een strikte `soc >= capPct` gezet vanuit de aanname dat de
+// tolerantie een bug was; teruggedraaid nadat bevestigd werd dat dit gewenst is.)
 
-test('atCap-drempel: soc net onder de limiet is GEEN carMaintaining (mismatch blijft staan)', () => {
+test('carMaintaining: soc 1% onder de limiet blijft "auto regelt het zelf" (geen herstart)', () => {
   const capPct = 60, soc = 59;
-  const reached = soc >= capPct - 1;          // tolerante rust-classificatie: true
-  const atCap   = soc >= capPct;               // strikte "echt op de limiet"-toets: false
-  assert.equal(reached, true, 'reached blijft tolerant (voor de rust-classificatie)');
-  assert.equal(atCap, false, 'atCap mag niet aanslaan als de SoC onder de limiet zakt');
-
+  const reached = soc >= capPct - 1;
   const want = true, actual = false, lastSentWant = true;
   const want2 = reached || (soc < capPct && want);
-  const carMaintainingOld = want2 && actual === false && reached && lastSentWant === true;
-  const carMaintainingNew = want2 && actual === false && atCap && lastSentWant === true;
-  assert.equal(carMaintainingOld, true, 'oude logica zou hier ten onrechte stil blijven (de bug)');
-  assert.equal(carMaintainingNew, false, 'nieuwe logica herkent dit als mismatch → commando volgt');
+  const carMaintaining = want2 && actual === false && reached && lastSentWant === true;
+  assert.equal(carMaintaining, true, 'binnen ~1% mag de tolerantie een herstart onderdrukken');
 });
 
-test('atCap-drempel: soc écht op de limiet blijft wél carMaintaining (geen onnodige herstart)', () => {
-  const capPct = 60, soc = 60;
-  const atCap = soc >= capPct;
-  const want2 = true, actual = false, lastSentWant = true;
-  const carMaintainingNew = want2 && actual === false && atCap && lastSentWant === true;
-  assert.equal(carMaintainingNew, true, 'op de exacte limiet blijft de zelf-regulatie-aanname geldig');
+test('carMaintaining: soc ver onder de limiet triggert wél een mismatch', () => {
+  const capPct = 60, soc = 50;
+  const reached = soc >= capPct - 1;
+  const want = true, actual = false, lastSentWant = true;
+  const want2 = reached || (soc < capPct && want);
+  const carMaintaining = want2 && actual === false && reached && lastSentWant === true;
+  assert.equal(reached, false);
+  assert.equal(carMaintaining, false, 'buiten de tolerantie moet het commando gewoon volgen');
 });

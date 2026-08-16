@@ -38,7 +38,6 @@ const SLOT_MIN     = 15;               // PricePredictor-resolutie
 const SLOT_H       = SLOT_MIN / 60;
 const VOLTAGE      = 230;
 const EFFICIENCY   = 0.91;             // on-board charger @ vol vermogen (~16A)
-const STALE_OVERRIDE_MS = 24 * 60 * 60 * 1000; // verlopen handmatige planning met onbereikbaar doel
 const RECONCILE_MS = 5 * 60 * 1000;    // min. tussen herhaalde bijstuur-commando's
 const FAIL_RETRY_MS = 90 * 1000;       // sneller opnieuw na een mislukte sturing (met wake)
 const VERIFY_MS    = 60 * 1000;        // na een nog-niet-bevestigd commando: ~1 min later opnieuw kijken
@@ -216,25 +215,30 @@ class TeslaScheduler {
   async recalcNow() { await this._tickSafe(); }
 
   /**
-   * Laat een verlopen handmatige planning vervallen, zodat het standaardprogramma het
-   * overneemt. Twee gronden:
-   *   (a) deadline voorbij én doel gehaald  → opdracht is afgerond;
-   *   (b) deadline > STALE_OVERRIDE_MS voorbij → onbereikbaar doel, niet eeuwig vasthouden.
-   * Zolang (a) niet geldt en (b) nog niet bereikt is, blijft de SoC-garantie doorladen.
+   * Laat een verlopen handmatige planning vervallen zodra zijn deadline voorbij is —
+   * puur tijd-gebonden, zonder voorwaarde over het doel. Een override is een
+   * ÉÉNMALIGE opdracht ("dit moet vóór dát moment binnen zijn"); is dat moment
+   * verstreken, dan is de opdracht afgerond (gehaald of niet) en neemt het
+   * standaardprogramma het over. Eerdere versie vereiste ook "doel gehaald", maar
+   * dat liet de widget een allang gepasseerd tijdstip als "actieve planning" tonen
+   * zolang de SoC nog net onder doel zat — verwarrend, en niet wat gevraagd was.
+   *
+   * De SoC-garantie gaat niet verloren: zodra het standaardprogramma het overneemt,
+   * gelden `auto_target_pct`/`auto_deadline` (de eerstvolgende 07:00) en die hebben
+   * dezelfde past_deadline-doorlaadregel verderop in deze functie. Was het
+   * override-doel hoger dan het standaarddoel en niet gehaald, dan wordt dat
+   * verschil dus bewust losgelaten — een verstreken eenmalige opdracht dwingt de
+   * planner niet eindeloos verder op een niet-standaard percentage.
    */
-  async _expireOverride(soc) {
+  async _expireOverride() {
     const dl = this.homey.settings.get('tesla_deadline_iso');
     const pct = this.homey.settings.get('tesla_target_pct');
     if (!dl || pct == null) return;
     const dlMs = new Date(dl).getTime();
     if (!isFinite(dlMs) || dlMs > Date.now()) return;
 
-    const reached = soc != null && soc >= pct;
-    const stale   = (Date.now() - dlMs) > STALE_OVERRIDE_MS;
-    if (!reached && !stale) return;
-
-    this.app.log(`[Scheduler] handmatige planning (${pct}% @ ${this.app.localTime(new Date(dlMs))}) vervallen`
-      + ` — ${reached ? `doel gehaald (SoC ${soc}%)` : 'deadline > 24u voorbij'}; standaardprogramma neemt over`);
+    this.app.log(`[Scheduler] handmatige planning (${pct}% @ ${this.app.localTime(new Date(dlMs))}) `
+      + 'verstreken — vervalt, standaardprogramma neemt over');
     this.homey.settings.unset('tesla_target_pct');
     this.homey.settings.unset('tesla_deadline_iso');
     try { await this.app._emitTeslaState?.(); } catch (_) {}
@@ -576,13 +580,12 @@ class TeslaScheduler {
     // 2a. Verlopen override opruimen. Een handmatige planning ("60% om 07:00") is een
     //     éénmalige opdracht, geen permanente stand. Hij verviel eerder alléén bij een
     //     nieuwe inplugging (zie hierboven) — bleef de auto aan de kabel hangen, dan
-    //     bleef de planning van vanmorgen eeuwig staan en kwam het standaardprogramma
-    //     (incl. opportunistische top-up) nooit aan bod.
-    //     Vervalt zodra de deadline voorbij is én zijn doel gehaald is; de SoC-garantie
-    //     (past_deadline: doorladen tot het doel) blijft dus intact. Vangnet: een
-    //     deadline die > STALE_OVERRIDE_MS achterloopt vervalt sowieso — anders houdt een
-    //     onbereikbaar doel (kabel eruit, laadpunt uit) de planning voor altijd gegijzeld.
-    await this._expireOverride(soc);
+    //     bleef de planning van vanmorgen eeuwig staan (ook zichtbaar in de widget) en
+    //     kwam het standaardprogramma (incl. opportunistische top-up) nooit aan bod.
+    //     Vervalt puur op tijd, zodra de deadline voorbij is — het standaardprogramma
+    //     heeft zijn eigen past_deadline-doorlaadregel (SoC-garantie), dus die gaat niet
+    //     verloren, alleen het specifieke override-doel/tijdstip wordt losgelaten.
+    await this._expireOverride();
 
     // 2b. Override of standaard-doel + opportunistisch plafond.
     //    Verre deadline (buiten 168u) → vakantie-hold: behandel als standaard-doel
@@ -981,16 +984,12 @@ class TeslaScheduler {
       }
       // De auto reguleert zichzelf op de limiet (zelf-pauze bij bereiken = `actual:false`): dat is
       // GEEN mismatch om te corrigeren. Eén keer inschakelen (eerste start), daarna met rust laten.
-      //
-      // LET OP: dit mag alleen gelden als de SoC ÉCHT op/boven de limiet staat (`atCap`, geen
-      // tolerantie) — niet bij de tolerante `reached` (capPct−1). Een auto stopt zelf bij het
-      // bereiken van de limiet, maar hervat NIET vanzelf zodra vampire drain de SoC daaronder
-      // laat zakken; dat vergt een vers start-commando. Met de tolerante `reached` bleef de auto
-      // hier vastzitten (5 uur, 0 commando's, SoC 59% tegen limiet 60%): elke tick concludeerde
-      // "carMaintaining", nooit een start. `atCap` sluit dat gat zonder de rust-classificatie
-      // (die wél op de tolerantie mag leunen — daar gaat het om chase-de-laatste-procenten) te raken.
-      const atCap       = soc >= capPct;
-      const carMaintaining = want2 && actual === false && atCap && this._lastSentWant === true;
+      // Bewust op de tolerante `reached` (capPct−1, dus binnen ~1%): niet overgevoelig achter het
+      // laatste procentje aan wanneer vampire drain de SoC net onder de limiet laat zakken — dat
+      // gaf eerder een korte, onnodige start voor een verwaarloosbaar verschil. (Was hier kort strak
+      // op `soc >= capPct` gezet na een misvatting dat dit een bug was; teruggedraaid — de tolerantie
+      // is gewenst gedrag, tot ~2%.)
+      const carMaintaining = want2 && actual === false && reached && this._lastSentWant === true;
       // actual===null = bat-device offline (auto slaapt). Bij want2=true: altijd mismatch —
       // we weten niet of de auto laadt en moeten het commando opnieuw sturen (met wake).
       // Bij want2=false: vertrouw _lastSentWant (stop-commando hoeft niet herhaald bij onbekende staat).
@@ -1166,7 +1165,7 @@ class TeslaScheduler {
 
     // Verlopen handmatige planning eerst opruimen (zelfde regel als in _tick), anders
     // blijft ook in deze modus een afgeronde opdracht het standaardprogramma blokkeren.
-    await this._expireOverride(soc);
+    await this._expireOverride();
 
     // Doelen: verplicht doel + deadline. Verre deadline → vakantie-hold (val terug
     // op standaard-doel tot de deadline het venster binnenkomt; ARCHITECTURE v5.7).
