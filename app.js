@@ -210,6 +210,13 @@ class EmsApp extends Homey.App {
     try {
       if (this.ems?.planningEngine) await this.ems.planningEngine.recalculate(reason);
     } catch (err) { this.error('[Override] recalc-fout:', err.message); }
+    // De prijs-scheduler heeft zijn eigen 15-min-tick en zag een doel-/deadline-wijziging
+    // dus pas tot een kwartier later — tot die tijd bleef een lopende laadsessie gewoon
+    // doorlopen op het óude plan (deadline een dag opschuiven gaf zichtbaar "geen reactie").
+    // Meteen een tick forceren: die herplant én stuurt het commando bij.
+    try {
+      await this.teslaScheduler?.recalcNow?.();
+    } catch (err) { this.error('[Override] scheduler-tick-fout:', err.message); }
   }
 
   /**

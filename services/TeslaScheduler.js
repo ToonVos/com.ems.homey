@@ -38,7 +38,7 @@ const SLOT_MIN     = 15;               // PricePredictor-resolutie
 const SLOT_H       = SLOT_MIN / 60;
 const VOLTAGE      = 230;
 const EFFICIENCY   = 0.91;             // on-board charger @ vol vermogen (~16A)
-const WEEK_MS      = 7 * 24 * 60 * 60 * 1000;  // opportunistisch hooguit 1×/week
+const STALE_OVERRIDE_MS = 24 * 60 * 60 * 1000; // verlopen handmatige planning met onbereikbaar doel
 const RECONCILE_MS = 5 * 60 * 1000;    // min. tussen herhaalde bijstuur-commando's
 const FAIL_RETRY_MS = 90 * 1000;       // sneller opnieuw na een mislukte sturing (met wake)
 const VERIFY_MS    = 60 * 1000;        // na een nog-niet-bevestigd commando: ~1 min later opnieuw kijken
@@ -208,6 +208,38 @@ class TeslaScheduler {
 
   getRecent(limit = 200) { return this._ring.slice(-limit); }
 
+  /**
+   * Forceer meteen een herberekening + commando-bijstelling. Aangeroepen zodra het doel
+   * of de deadline verandert: anders zag de scheduler die wijziging pas bij zijn volgende
+   * 15-min-tick en liep een lopende sessie tot dan door op het oude plan.
+   */
+  async recalcNow() { await this._tickSafe(); }
+
+  /**
+   * Laat een verlopen handmatige planning vervallen, zodat het standaardprogramma het
+   * overneemt. Twee gronden:
+   *   (a) deadline voorbij én doel gehaald  → opdracht is afgerond;
+   *   (b) deadline > STALE_OVERRIDE_MS voorbij → onbereikbaar doel, niet eeuwig vasthouden.
+   * Zolang (a) niet geldt en (b) nog niet bereikt is, blijft de SoC-garantie doorladen.
+   */
+  async _expireOverride(soc) {
+    const dl = this.homey.settings.get('tesla_deadline_iso');
+    const pct = this.homey.settings.get('tesla_target_pct');
+    if (!dl || pct == null) return;
+    const dlMs = new Date(dl).getTime();
+    if (!isFinite(dlMs) || dlMs > Date.now()) return;
+
+    const reached = soc != null && soc >= pct;
+    const stale   = (Date.now() - dlMs) > STALE_OVERRIDE_MS;
+    if (!reached && !stale) return;
+
+    this.app.log(`[Scheduler] handmatige planning (${pct}% @ ${this.app.localTime(new Date(dlMs))}) vervallen`
+      + ` — ${reached ? `doel gehaald (SoC ${soc}%)` : 'deadline > 24u voorbij'}; standaardprogramma neemt over`);
+    this.homey.settings.unset('tesla_target_pct');
+    this.homey.settings.unset('tesla_deadline_iso');
+    try { await this.app._emitTeslaState?.(); } catch (_) {}
+  }
+
   /** Compacte status + projectie voor de override-widget. */
   getStatus() { return this._last; }
 
@@ -266,14 +298,18 @@ class TeslaScheduler {
 
     const HOUR = 3_600_000;
 
-    // 1) EnergyZero: échte uurprijzen voor heel vandaag + morgen (indien provider).
+    // 1) Échte marktprijzen voor heel vandaag + morgen (indien provider):
+    //    Nord Pool per kwartier, EnergyZero per uur.
     try {
       const actual = this.app.pricePredictor?.getActualPrices
         ? await this.app.pricePredictor.getActualPrices() : null;
       if (actual && actual.size) {
+        // Sleutel afronden op de resolutie van de bron: bij kwartierprijzen is dat
+        // het slot zelf (base is 15-min), bij uurprijzen het uur eromheen.
+        const step = this.app.pricePredictor.actualStepMs?.() || HOUR;
         for (const s of base) {
-          const hs = Math.floor(s.t / HOUR) * HOUR;
-          if (actual.has(hs)) { s.import_eur = actual.get(hs); s.actual = true; this._lastOverlay++; }
+          const key = Math.floor(s.t / step) * step;
+          if (actual.has(key)) { s.import_eur = actual.get(key); s.actual = true; this._lastOverlay++; }
         }
         if (this._lastOverlay) return this._applyGranularity(base);   // volledige actuals → klaar
       }
@@ -537,7 +573,18 @@ class TeslaScheduler {
     const effRate = this._effectiveRateKw(powerKw, this._lastModuleTemp);   // kW (temp-bewust)
     const slotKwh = effRate * SLOT_H;
 
-    // 2. Override of standaard-doel + opportunistisch plafond.
+    // 2a. Verlopen override opruimen. Een handmatige planning ("60% om 07:00") is een
+    //     éénmalige opdracht, geen permanente stand. Hij verviel eerder alléén bij een
+    //     nieuwe inplugging (zie hierboven) — bleef de auto aan de kabel hangen, dan
+    //     bleef de planning van vanmorgen eeuwig staan en kwam het standaardprogramma
+    //     (incl. opportunistische top-up) nooit aan bod.
+    //     Vervalt zodra de deadline voorbij is én zijn doel gehaald is; de SoC-garantie
+    //     (past_deadline: doorladen tot het doel) blijft dus intact. Vangnet: een
+    //     deadline die > STALE_OVERRIDE_MS achterloopt vervalt sowieso — anders houdt een
+    //     onbereikbaar doel (kabel eruit, laadpunt uit) de planning voor altijd gegijzeld.
+    await this._expireOverride(soc);
+
+    // 2b. Override of standaard-doel + opportunistisch plafond.
     //    Verre deadline (buiten 168u) → vakantie-hold: behandel als standaard-doel
     //    tot de deadline het venster binnenkomt (ARCHITECTURE v5.7).
     const ov = await this.app.getTeslaOverride();
@@ -557,16 +604,12 @@ class TeslaScheduler {
     );
     // Opportunistisch plafond, hard afgetopt op 85% (bovenkant voor de accu).
     const oppCeiling = Math.min(this.homey.settings.get('ev_opportunistic_soc') ?? 85, 85);
-    // Override of vakantie-hold: geen opportunistisch extra (auto staat dan lang
-    // stil → niet naar 85 vullen). Alleen normaal dagelijks gebruik krijgt de top-up.
-    const ceiling = (effActive || ov.far_deadline) ? mandatory : Math.max(mandatory, oppCeiling);
-
-    // Wekelijkse opportunistische top-up: zodra het plafond (≈) bereikt is, 7
-    // dagen op slot zodat dit hooguit 1× per week gebeurt.
-    if (!effActive && soc != null && soc >= oppCeiling - 1) {
-      const lastOpp = this.homey.settings.get('tesla_opp_last_ts') || 0;
-      if ((Date.now() - lastOpp) >= WEEK_MS) this.homey.settings.set('tesla_opp_last_ts', Date.now());
-    }
+    // Alleen de vakantie-hold sluit opportunistisch laden uit (auto staat dan lang stil
+    // → niet naar 85 vullen). Een handmatige planning binnen de week doet dat NIET meer:
+    // die zegt alleen "dit moet vóór dát moment binnen zijn", niet "verder niets laden".
+    // Ligt het goedkoopste blok van de komende zes dagen toevallig nú, dan hoort de auto
+    // die kans te pakken, ook al is er een planning voor morgenochtend actief.
+    const ceiling = ov.far_deadline ? mandatory : Math.max(mandatory, oppCeiling);
 
     // 3. Horizon — EpexPredictor-forecast met PbtH-overlay (echte beursprijzen
     //    voor de eerstvolgende 8 uur) er overheen.
@@ -687,19 +730,31 @@ class TeslaScheduler {
       const effWithin = within.map(h => ({ ...h, import_eur: (h.import_eur ?? 0) + premPerKwh(h.t) }));
       addAll(this._pickContiguousOptimal(effWithin, needTotKwh + overheadKwh, slotKwh, mandSet, sessionEur));
 
-      // Opportunistisch tot plafond (≤85%), hele horizon, excl. verplicht.
-      // Hooguit 1× per week: na het bereiken van het plafond 7 dagen op slot.
-      const lastOpp   = this.homey.settings.get('tesla_opp_last_ts') || 0;
-      const oppLocked = (now - lastOpp) < WEEK_MS;
-      const fromOpp   = Math.max(soc, mandatory);
-      const need2     = (!oppLocked && soc < ceiling)
-        ? Math.max(0, (ceiling - fromOpp) / 100 * cap) / EFFICIENCY : 0;
+      // Opportunistisch tot plafond (≤85%), excl. de al verplicht gekozen slots.
+      //
+      // Venster = zes dagen vooruit (`ev_opportunistic_window_h`, default 144u), niet de
+      // volle 168u-horizon. Reden: het gaat om de vraag "is dit de beste koop tot en met
+      // komende vrijdag". Kijk je op zondag zeven dagen vooruit, dan telt de zaterdag
+      // erna mee en laat je een goed zondagsdal liggen voor een dag die je nooit haalt.
+      // Zes dagen vangt zaterdag én zondag correct af; alleen de verste (en meest
+      // onzekere) staart valt af.
+      //
+      // Géén weeklock meer. De rem is niet de kalender maar de SoC-ruimte: heb je
+      // zaterdag naar 85% geladen en de auto daarna leeggereden, dan hoor je zondag
+      // opnieuw te kunnen profiteren van een dal. Staat hij nog vol, dan is er niets te
+      // laden en gebeurt er vanzelf niets.
+      const oppWindowMs = (this.homey.settings.get('ev_opportunistic_window_h') ?? 144) * 3_600_000;
+      const oppWin      = fullWin.filter(h => h.t < now + oppWindowMs);
+      const fromOpp     = Math.max(soc, mandatory);
+      const need2       = soc < ceiling ? Math.max(0, (ceiling - fromOpp) / 100 * cap) / EFFICIENCY : 0;
       // AANEENGESLOTEN-bewust (net als de verplichte vulling en Fase 0): met
       // _pickCheapest greep de opp-tak losse goedkoopste kwartiertjes en liet bij
       // vlakke (uur)prijzen een gat vallen → twee laadbeurten waar één had gemoeten.
       // _pickContiguousOptimal weegt n_runs × C_session, dus splitst alléén als de
-      // energie-besparing de extra sessie-/wake-kost overtreft.
-      const oppSet    = this._pickContiguousOptimal(fullWin, need2, slotKwh, mandSet, sessionEur).set;
+      // energie-besparing de extra sessie-/wake-kost overtreft. Het kent mandSet als
+      // reeds geplande tijd: sluit het opp-blok daarop aan, dan is dat één laadsessie
+      // en telt er geen tweede wake mee.
+      const oppSet = this._pickContiguousOptimal(oppWin, need2, slotKwh, mandSet, sessionEur).set;
 
       kwhNeeded = (soc < mandatory ? (mandatory - soc) / 100 * cap / EFFICIENCY : 0) + need2;
       selectedCount = mandSet.size + oppSet.size;
@@ -765,11 +820,11 @@ class TeslaScheduler {
       }
 
       if (kwhNeeded <= 0) {
-        // Niets te laden: boven het doel, en opportunistisch al gehaald/op slot.
+        // Niets te laden: op of boven doel én plafond — er is simpelweg geen ruimte.
         chargeNow = false;
         decision = 'idle';
-        const opp = (now - (this.homey.settings.get('tesla_opp_last_ts') || 0)) < WEEK_MS;
-        reason = `SoC ${soc}% boven doel ${mandatory}% — niets gepland${opp ? ' (opportunistisch deze week gehaald)' : ''}`;
+        reason = `SoC ${soc}% boven doel ${mandatory}% — niets gepland`
+          + (soc >= ceiling ? ` (plafond ${ceiling}% bereikt)` : '');
       } else if (now > dlMs && soc < mandatory) {
         // SoC-garantie: deadline voorbij, standaard-doel niet gehaald → doorladen.
         chargeNow = true;
@@ -1100,6 +1155,10 @@ class TeslaScheduler {
     const connected = st?.connected ?? false;
     const soc = st?.soc ?? null;
 
+    // Verlopen handmatige planning eerst opruimen (zelfde regel als in _tick), anders
+    // blijft ook in deze modus een afgeronde opdracht het standaardprogramma blokkeren.
+    await this._expireOverride(soc);
+
     // Doelen: verplicht doel + deadline. Verre deadline → vakantie-hold (val terug
     // op standaard-doel tot de deadline het venster binnenkomt; ARCHITECTURE v5.7).
     const ov = await this.app.getTeslaOverride();
@@ -1107,8 +1166,10 @@ class TeslaScheduler {
     const vacationSoc = s.get('ev_vacation_soc') ?? 55;
     const mandatory = effActive ? ov.target_pct : (ov.far_deadline ? vacationSoc : ov.auto_target_pct);
     const dlMs = new Date(effActive ? ov.deadline_iso : ov.auto_deadline).getTime();
-    // Vakantie-hold: geen overschot-top-up boven het hold-niveau.
-    const ceiling = (effActive || ov.far_deadline) ? mandatory : Math.min(s.get('ev_opportunistic_soc') ?? 85, 100);
+    // Vakantie-hold: geen overschot-top-up boven het hold-niveau. Een handmatige planning
+    // binnen de week blokkeert de top-up niet (zelfde regel als in _tick): gratis zon
+    // boven het doel is nooit een reden om te stoppen.
+    const ceiling = ov.far_deadline ? mandatory : Math.max(mandatory, Math.min(s.get('ev_opportunistic_soc') ?? 85, 100));
 
     // Overschot nu (zero-export): beschikbaar = huidig EV-vermogen − grid − buffer.
     const grid   = await this._readGridW();

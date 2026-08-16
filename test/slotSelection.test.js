@@ -108,3 +108,39 @@ test('contiguous: is snel op realistische maat (672 slots, 200 nodig)', () => {
   const ms = Date.now() - t0;
   assert.ok(ms < 500, `duurde ${ms}ms — event-loop-blokkade-risico`);
 });
+
+// ─── tijd-bewuste contiguïteit rond al geplande slots ────────────────────────
+// De opportunistische pas krijgt de reeds geplande (verplichte) slots als excludeSet.
+// Contiguïteit moet dan op de KLOK bepaald worden, niet op array-index na filteren.
+
+test('contiguous: opportunistisch naast de geplande uren betaalt geen tweede sessie', () => {
+  // slot 2+3 zijn al gepland. Keuze voor 2 opp-slots:
+  //   - direct ná het geplande blok (idx 4,5, prijs 0.20) → zelfde sessie, geen C_session
+  //   - los verderop (idx 8,9, prijs 0.17) → wél een eigen sessie
+  // Energieverschil 2×0.03×0.8625 = €0.052 < C_session €0.10 → aansluiten wint.
+  const slots = mkSlots([0.50, 0.50, 0.01, 0.01, 0.20, 0.20, 0.50, 0.50, 0.17, 0.17]);
+  const planned = new Set([slots[2].t, slots[3].t]);
+  const r = pickContiguousOptimal(slots, 2 * 0.8625, 0.8625, planned, 0.10);
+  assert.ok(r.set.has(slots[4].t) && r.set.has(slots[5].t),
+    'moet aansluiten op het geplande blok i.p.v. een losse tweede sessie te starten');
+});
+
+test('contiguous: een gat door geplande slots telt als twee sessies, niet als één blok', () => {
+  // idx 2,3 zijn gepland; de goedkope opp-slots liggen op idx 1 en 4 — in de array na
+  // filteren staan die naast elkaar, in de tijd niet. Twee losse slots rond het geplande
+  // blok sluiten er echter beide op aan → samen één sessie, dus toch de goedkoopste keuze.
+  const slots = mkSlots([0.50, 0.02, 0.99, 0.99, 0.02, 0.50, 0.30, 0.30]);
+  const planned = new Set([slots[2].t, slots[3].t]);
+  const r = pickContiguousOptimal(slots, 2 * 0.8625, 0.8625, planned, 0.10);
+  assert.ok(r.set.has(slots[1].t) && r.set.has(slots[4].t));
+  assert.ok(!r.set.has(slots[2].t) && !r.set.has(slots[3].t), 'geplande slots blijven ongemoeid');
+});
+
+test('contiguous: zonder aansluiting wint het goedkopere losse blok wél', () => {
+  // Zelfde opzet als de eerste test, maar nu is het verschil groter dan C_session:
+  // 2×0.10×0.8625 = €0.17 > €0.10 → het losse blok is per saldo goedkoper.
+  const slots = mkSlots([0.50, 0.50, 0.01, 0.01, 0.20, 0.20, 0.50, 0.50, 0.10, 0.10]);
+  const planned = new Set([slots[2].t, slots[3].t]);
+  const r = pickContiguousOptimal(slots, 2 * 0.8625, 0.8625, planned, 0.10);
+  assert.ok(r.set.has(slots[8].t) && r.set.has(slots[9].t));
+});
